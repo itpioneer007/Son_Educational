@@ -38,6 +38,7 @@ from skill_ppt import (
     is_skill_template, generate_skill_pptx,
     get_template_list as get_skill_template_list,
 )
+from spark_ppt import generate_pptx_via_spark
 
 app = FastAPI(title="EduAI 课件生成 API", version="1.0.0")
 
@@ -198,15 +199,22 @@ async def _run_generation(task_id: str, params: dict):
         content["grade"] = params.get("grade", "")
         content["duration"] = params.get("duration", "45分钟")
         if params["type"] == "ppt":
-            # 使用模版生成：优先显式指定模版，否则根据学科自动匹配
+            # 两段式流程：DeepSeek 已生成大纲(content)，此处交给讯飞 PPT 模型出稿
             template_id = params.get("template", "") or ""
-            _update_task(task_id, progress=70,
-                         stage="正在套用 PPT 模版渲染中...")
-            # skill 精品模版走保版式引擎
-            if template_id and is_skill_template(template_id):
-                filepath, filename = generate_skill_pptx(content, template_id)
+            _update_task(task_id, progress=70, stage="正在调用讯飞 PPT 模型生成中...")
+            # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
+            spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
+
+            if spark_result:
+                filepath, filename = spark_result
             else:
-                filepath, filename = generate_pptx_from_template(content, template_id)
+                # 讯飞不可用/失败 → 回退本地模板渲染，保证任务不中断
+                _update_task(task_id, stage="讯飞生成不可用，回退本地模版渲染...")
+                # skill 精品模版走保版式引擎
+                if template_id and is_skill_template(template_id):
+                    filepath, filename = generate_skill_pptx(content, template_id)
+                else:
+                    filepath, filename = generate_pptx_from_template(content, template_id)
         elif params["type"] == "doc":
             filepath, filename = generate_docx(content)
         elif params["type"] == "exam":

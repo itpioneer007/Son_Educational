@@ -56,6 +56,12 @@ server/data/
 # API Key 配置（含敏感信息）
 server/config.local.py
 
+# 讯飞 PPT 接入凭据（含 AppID / APISecret，不上传）
+server/spark_ppt/config/spark_config.py
+
+# 讯飞测试素材（体积过大，不上传）
+server/spark_ppt/data/
+
 # 视频资源文件（体积过大，不上传 GitHub）
 public/video/
 
