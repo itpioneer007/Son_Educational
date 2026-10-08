@@ -65,6 +65,9 @@ server/spark_ppt/data/
 # 视频资源文件（体积过大，不上传 GitHub）
 public/video/
 
+# AI 生成的方案文档（过程产物，不提交）
+.trae/documents/
+
 # 防止其他项目混入
 .agents/
 .codex/

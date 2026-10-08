@@ -7,6 +7,7 @@ import {
   formatSessionTime,
 } from "../composables/useAssistant.js";
 import { useUserStore } from "../stores/userStore.js";
+import AiBadge from "../components/AiBadge.vue";
 
 const router = useRouter();
 const assistant = useAssistant();
@@ -792,6 +793,7 @@ watch(activeId, scrollToBottom);
           </svg>
         </button>
         <span class="assistant-mobile-bar__title">知课 AI 备课助手</span>
+        <AiBadge name="qwen" size="sm" />
       </header>
 
       <div class="mode-bar">
@@ -1036,6 +1038,11 @@ watch(activeId, scrollToBottom);
             <h1 class="welcome__title">知课 AI 备课助手</h1>
             <p class="welcome__desc">
               帮你把备课想法理清楚：选择左侧「备课构思」「教案草稿」「出题草稿」，填写课题后一键生成内容草稿，满意后还可「转入生成」落地成真实文件；「通用问答」可自由对话。
+            </p>
+            <p class="welcome__power">
+              <span class="welcome__power-label">对话由</span>
+              <AiBadge name="qwen" />
+              <span class="welcome__power-label">驱动</span>
             </p>
           </div>
         </div>
@@ -2275,6 +2282,22 @@ watch(activeId, scrollToBottom);
   max-width: 400px;
   margin-left: auto;
   margin-right: auto;
+}
+
+.welcome__power {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 5px 12px;
+  background: #f7f8fa;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.welcome__power-label {
+  font-size: 0.74rem;
+  color: var(--ink-muted);
 }
 
 /* ═══════════════════════════════════════════════
