@@ -123,13 +123,15 @@ def _normalize_templates(data) -> list:
     return result
 
 
-def get_templates(pay_type: str = "not_free", page_num: int = 1) -> dict:
+def get_templates(pay_type: str = "not_free") -> dict:
     """查询讯飞 PPT 模板列表。
 
-    注意：上游对 pageSize / style / color / industry 过滤参数不生效，
-    固定每页返回 10 条，因此只能靠 pageNum 翻页。
+    实测结论：上游 /template/list 对 pageNum / pageSize / style / color /
+    industry / payType 等参数一律不生效——无论怎么传，都返回同一批模板；
+    响应里的 total（如 719）是从不变化的虚高值，不能作为数量展示。
+    因此这里不再翻页，直接取回全部可用模板并按 id 去重，total 取去重后的真实条数。
 
-    返回 {"total": 总数, "templates": [{id, name, preview, style, color, industry}]}
+    返回 {"total": 真实条数, "templates": [{id, name, preview, style, color, industry}]}
     """
     cfg = _load_config()
     if not cfg.APP_ID or not cfg.API_SECRET:
@@ -137,7 +139,7 @@ def get_templates(pay_type: str = "not_free", page_num: int = 1) -> dict:
 
     resp = requests.get(
         f"{_API_BASE}/template/list",
-        params={"payType": pay_type, "pageNum": page_num, "pageSize": 10},
+        params={"payType": pay_type, "pageNum": 1, "pageSize": 50},
         headers=_headers(cfg.APP_ID, cfg.API_SECRET),
         timeout=30,
     )
@@ -147,10 +149,14 @@ def get_templates(pay_type: str = "not_free", page_num: int = 1) -> dict:
         raise RuntimeError(
             f"查询讯飞模板失败: code={payload.get('code')} desc={payload.get('desc')}"
         )
-    data = payload.get("data")
-    templates = _normalize_templates(data)
-    total = data.get("total") if isinstance(data, dict) else None
-    return {"total": int(total or len(templates)), "templates": templates}
+
+    unique, seen = [], set()
+    for t in _normalize_templates(payload.get("data")):
+        if t["id"] in seen:
+            continue
+        seen.add(t["id"])
+        unique.append(t)
+    return {"total": len(unique), "templates": unique}
 
 
 # ════════════════════════════════════════════════════════════════

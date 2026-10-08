@@ -7,6 +7,7 @@ import json
 import httpx
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
+    PPT_MODEL, DOC_MODEL, QUIZ_MODEL, EXAM_MODEL,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL,
 )
 
@@ -153,8 +154,8 @@ QUIZ_SYSTEM_PROMPT = """你是一位经验丰富的学科命题专家。
 3. 答案准确，解析详细"""
 
 
-async def call_deepseek(system_prompt: str, user_prompt: str) -> dict:
-    """调用 DeepSeek API 生成内容"""
+async def call_deepseek(system_prompt: str, user_prompt: str, model: str = None) -> dict:
+    """调用内容生成模型生成内容；model 用于按角色指定不同 LLM"""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError(
             "⚠️  未设置 DEEPSEEK_API_KEY\n"
@@ -171,7 +172,7 @@ async def call_deepseek(system_prompt: str, user_prompt: str) -> dict:
                 "Content-Type": "application/json",
             },
             json={
-                "model": DEEPSEEK_MODEL,
+                "model": model or DEEPSEEK_MODEL,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -193,9 +194,10 @@ async def call_deepseek(system_prompt: str, user_prompt: str) -> dict:
 
 
 async def generate_ppt_content(
-    subject: str, topic: str, grade: str = "", style: str = "", outline: str = ""
+    subject: str, topic: str, grade: str = "", style: str = "", outline: str = "",
+    revision: str = "",
 ) -> dict:
-    """生成 PPT 课件内容"""
+    """生成 PPT 课件内容；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下课程设计 PPT 课件内容：
 
 学科：{subject}
@@ -204,13 +206,16 @@ async def generate_ppt_content(
 风格偏好：{style or '简洁专业'}
 大纲方向：{outline or '由你自由设计'}
 """
-    return await call_deepseek(PPT_SYSTEM_PROMPT, user_prompt)
+    if revision:
+        user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
+    return await call_deepseek(PPT_SYSTEM_PROMPT, user_prompt, PPT_MODEL)
 
 
 async def generate_doc_content(
-    subject: str, topic: str, grade: str = "", requirements: str = ""
+    subject: str, topic: str, grade: str = "", requirements: str = "",
+    revision: str = "",
 ) -> dict:
-    """生成教案文档内容"""
+    """生成教案文档内容；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下课程编写完整教案：
 
 学科：{subject}
@@ -218,21 +223,38 @@ async def generate_doc_content(
 年级：{grade or '未指定'}
 其他要求：{requirements or '无'}
 """
-    return await call_deepseek(DOC_SYSTEM_PROMPT, user_prompt)
+    if revision:
+        user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
+    return await call_deepseek(DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL)
 
 
 async def generate_quiz_content(
-    subject: str, topic: str, grade: str = "", difficulty: str = "适中"
+    subject: str, topic: str, grade: str = "", difficulty: str = "适中",
+    scenario: str = "", count: int = 8, question_types: str = "",
+    target: str = "", student_profile: str = "", assessment: str = "",
+    revision: str = "",
 ) -> dict:
-    """生成教学练习题"""
+    """生成教学练习题；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下课程生成练习题：
 
 学科：{subject}
 课题：{topic}
 年级：{grade or '未指定'}
+使用场景：{scenario or '随堂检测'}
+题量：{count} 题
 难度：{difficulty}
 """
-    return await call_deepseek(QUIZ_SYSTEM_PROMPT, user_prompt)
+    if question_types:
+        user_prompt += f"题型构成：{question_types}\n"
+    if target:
+        user_prompt += f"考查目标：{target}\n"
+    if student_profile:
+        user_prompt += f"学生学情：{student_profile}（据此调整难度梯度与题目表述）\n"
+    if assessment:
+        user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
+    if revision:
+        user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
+    return await call_deepseek(QUIZ_SYSTEM_PROMPT, user_prompt, QUIZ_MODEL)
 
 
 async def generate_exam_content(
@@ -240,8 +262,11 @@ async def generate_exam_content(
     difficulty: str = "中等", total_score: int = 100,
     choice_count: int = 10, fill_count: int = 6, essay_count: int = 4,
     generate_ab: bool = False,
+    usage_scene: str = "", assessment: str = "",
+    target: str = "", student_profile: str = "",
+    revision: str = "",
 ) -> dict:
-    """生成完整试卷"""
+    """生成完整试卷；revision 为用户在问答区提出的修改意见"""
     system_prompt = """你是一个专业的试卷出题专家。请为教师生成一套完整的考试试卷。
 
 要求：
@@ -297,7 +322,17 @@ async def generate_exam_content(
 题型配置：选择题{choice_count}题 / 填空题{fill_count}题 / 解答题{essay_count}题
 {'需要生成A/B两套卷' if generate_ab else '生成一套试卷'}
 """
-    return await call_deepseek(system_prompt, user_prompt)
+    if usage_scene:
+        user_prompt += f"使用场景：{usage_scene}\n"
+    if target:
+        user_prompt += f"考查目标：{target}\n"
+    if student_profile:
+        user_prompt += f"学生学情：{student_profile}（据此调整难度梯度与题目表述）\n"
+    if assessment:
+        user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
+    if revision:
+        user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
+    return await call_deepseek(system_prompt, user_prompt, EXAM_MODEL)
 
 
 # ── AI 备课助手 Prompt ──────────────────────────────────────────

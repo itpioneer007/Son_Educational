@@ -9,11 +9,15 @@ import {
 } from "../composables/useFeatures.js";
 import {
   submitCoursewareTask,
+  refineCoursewareTask,
   subscribeProgress,
   downloadFile,
   getCoursewareHistory as fetchApiHistory,
   deleteCoursewareTask as deleteApiTask,
 } from "../composables/useCoursewareApi.js";
+import ContentRevisePanel from "../components/ContentRevisePanel.vue";
+import FormWizard from "../components/FormWizard.vue";
+import TemplateMarket from "../components/TemplateMarket.vue";
 
 const route = useRoute();
 
@@ -42,6 +46,117 @@ const currentTaskStage = ref("");
 const showProgress = ref(false);
 const generatedFilename = ref("");
 
+// ── 内容制作「内容调整」问答区 ─────────────────────────────────
+// 左侧表单收集创作要素并提交生成初版；右侧问答区供用户提出修改意见，
+// 提交后按意见重新生成内容，并给出新版文件下载。
+const REVISE_TITLE = {
+  ppt: "课件内容调整",
+  doc: "教案内容调整",
+  interactive: "练习内容调整",
+  exam: "试卷内容调整",
+};
+
+const REVISE_PLACEHOLDER = {
+  ppt: "说明课件要调整的地方…",
+  doc: "说明教案要调整的地方…",
+  interactive: "说明题目要调整的地方…",
+  exam: "说明试卷要调整的地方…",
+};
+
+const panelByApiType = {
+  ppt: "ppt",
+  doc: "doc",
+  quiz: "interactive",
+  exam: "exam",
+};
+
+// 各面板独立的调整记录，切换面板时保留各自上下文
+const reviseMessages = ref({ ppt: [], doc: [], interactive: [], exam: [] });
+let reviseSeq = 0;
+const nextReviseId = () => `revise-${++reviseSeq}`;
+
+const currentReviseTitle = computed(
+  () => REVISE_TITLE[activePanel.value] || "内容调整",
+);
+const currentRevisePlaceholder = computed(
+  () => REVISE_PLACEHOLDER[activePanel.value] || "说明要调整的地方…",
+);
+const currentReviseMessages = computed(
+  () => reviseMessages.value[activePanel.value] || [],
+);
+// 已有可下载的初版内容时，才允许提交修改意见
+const reviseReady = computed(() => Boolean(generatedFilename.value));
+
+// 初版生成完成后写入一条引导消息（含新文件下载入口）
+function pushInitialMessage(panel, filename) {
+  reviseMessages.value[panel] = [
+    {
+      id: nextReviseId(),
+      role: "assistant",
+      text: "初版内容已生成。可在下方说明需要调整的地方，我会据此更新文件。",
+      filename: filename || "",
+    },
+  ];
+}
+
+// 提交修改意见：按意见重跑生成，产出新版文件
+async function handleReviseSend(text) {
+  const panel = activePanel.value;
+  const taskId = currentTaskId.value;
+  const list = reviseMessages.value[panel];
+  if (!taskId || !list) {
+    showToast("请先生成初版内容");
+    return;
+  }
+
+  list.push({ id: nextReviseId(), role: "user", text });
+
+  isGenerating.value = true;
+  currentTaskProgress.value = 0;
+  currentTaskStage.value = "正在按修改意见调整…";
+  generatedFilename.value = "";
+
+  try {
+    await refineCoursewareTask(taskId, text);
+    subscribeProgress(taskId, {
+      onProgress: (data) => {
+        currentTaskProgress.value = data.progress;
+        currentTaskStage.value = data.stage;
+      },
+      onComplete: (data) => {
+        isGenerating.value = false;
+        generatedFilename.value = data.filename || "";
+        list.push({
+          id: nextReviseId(),
+          role: "assistant",
+          text: "已按你的意见更新，可直接下载新文件。",
+          filename: data.filename || "",
+        });
+        showToast(`已更新：${data.filename}`);
+        history.value = getHistory();
+        stats.value = getStats();
+      },
+      onError: (err) => {
+        isGenerating.value = false;
+        list.push({
+          id: nextReviseId(),
+          role: "assistant",
+          text: `调整失败：${err.message}`,
+        });
+        showToast(`调整失败：${err.message}`);
+      },
+    });
+  } catch (err) {
+    isGenerating.value = false;
+    list.push({
+      id: nextReviseId(),
+      role: "assistant",
+      text: `调整失败：${err.message}`,
+    });
+    showToast(`调整失败：${err.message}`);
+  }
+}
+
 // 预览弹窗
 const showPreview = ref(false);
 const previewItem = ref(null);
@@ -57,59 +172,34 @@ const feedbackFileName = ref("");
 const fileInputRef = ref(null);
 const expandedRecord = ref(null);
 
-// ==================== PPT 模版数据 ====================
-const pptTemplates = ref([]);
-const pptTemplateLoading = ref(false);
-
-async function fetchPptTemplates() {
-  pptTemplateLoading.value = true;
-  try {
-    const res = await fetch("http://localhost:8000/api/templates");
-    if (res.ok) {
-      const data = await res.json();
-      pptTemplates.value = data.templates || [];
-    }
-  } catch (e) {
-    console.warn("获取 PPT 模版列表失败:", e);
-  } finally {
-    pptTemplateLoading.value = false;
-  }
-}
-
 // ==================== 讯飞智文模板数据 ====================
-// 上游接口固定每页返回 10 条，只能靠 page 翻页
-const SPARK_PAGE_SIZE = 10;
+// 讯飞模板接口不支持翻页/筛选，一次性返回全部可用模板
 const sparkTemplates = ref([]);
 const sparkTemplateLoading = ref(false);
 const sparkTemplateError = ref("");
-const sparkTemplatePage = ref(1);
-const sparkTemplateTotal = ref(0);
 
-const sparkTotalPages = computed(() =>
-  Math.max(1, Math.ceil(sparkTemplateTotal.value / SPARK_PAGE_SIZE)),
-);
-
-async function fetchSparkTemplates(page = 1) {
+async function fetchSparkTemplates() {
   sparkTemplateLoading.value = true;
   sparkTemplateError.value = "";
   try {
-    const res = await fetch(
-      `http://localhost:8000/api/spark/templates?page=${page}`,
-    );
+    const res = await fetch("http://localhost:8000/api/spark/templates");
     const data = await res.json();
     sparkTemplates.value = data.templates || [];
-    sparkTemplateTotal.value = data.total || 0;
-    sparkTemplatePage.value = data.page || page;
     if (data.error) sparkTemplateError.value = data.error;
   } catch (e) {
     console.warn("获取讯飞模板列表失败:", e);
     sparkTemplates.value = [];
-    sparkTemplateTotal.value = 0;
     sparkTemplateError.value = "无法连接后端服务，可稍后重试";
   } finally {
     sparkTemplateLoading.value = false;
   }
 }
+
+// 当前面板的 AI 协作引擎：课件 = DeepSeek 出大纲 + 讯飞智文 排版出稿；
+// 教案 / 练习 / 试卷为纯文本产出，仅 DeepSeek。
+const currentPipeline = computed(() =>
+  activePanel.value === "ppt" ? ["deepseek", "zhiwen"] : ["deepseek"],
+);
 
 // 拼完整预览图地址：后端返回 /api/... 相对路径。
 // 若 preview 不是真实图片路径（早期模板误把风格描述放进预览字段），
@@ -132,53 +222,24 @@ function resolveSubjectName(form) {
   return form.subject === CUSTOM_OPTION ? form.subjectCustom : form.subject;
 }
 
-// 自动匹配 PPT 模版提示（使用归一化学科名，避免"自定义"标记干扰匹配）
-// 学段为小学时优先推荐 skill 精品模版（卡通风格适合低龄课堂）；
-// 非小学学段跳过 skill 模版，避免卡通风格误匹配到初高中
-const autoMatchedTemplate = computed(() => {
-  const subject = resolveSubjectName(pptForm.value);
-  if (!subject) return null;
-  const grade = pptForm.value.grade || "";
-  const isPrimary = grade.includes("小学");
-  // 1) 小学学段 → 优先精品卡通模版
-  if (isPrimary) {
-    const skillTpl = pptTemplates.value.find(
-      (t) =>
-        t.engine === "skill" &&
-        t.subjects?.some((s) => "小学".includes(s) || s.includes("小学")),
-    );
-    if (skillTpl) return skillTpl;
-  }
-  // 2) 非小学学段：仅从标准模版中按学科关键词匹配（跳过卡通精品模版）
-  for (const t of pptTemplates.value) {
-    if (t.engine === "skill") continue;
-    if (t.subjects?.some((s) => subject.includes(s) || s.includes(subject))) {
-      return t;
-    }
-  }
-  return null;
-});
-
-// 选中精品模版时，展示其版式容量建议（帮助用户控制篇幅）
-const skillTemplateCapacity = computed(() => {
-  const t = selectedPptTemplate.value;
-  if (!t || t.engine !== "skill") return null;
-  return {
-    maxSections: 4, // 章节扉页数量
-    maxContentPages: 10, // 内容页数量
-  };
-});
-
-// 当前手动选中的 PPT 模版对象（用于展示预览图 / 引擎信息）
-const selectedPptTemplate = computed(
-  () => pptTemplates.value.find((t) => t.id === pptForm.value.template) || null,
+// 学科差异化：课堂互动与评估维度（无预设时回退通用选项）
+function subjectTraits(form) {
+  return subjectPresets[resolveSubjectName(form)] || {};
+}
+const pptInteractions = computed(
+  () => subjectTraits(pptForm.value).interactions || DEFAULT_INTERACTIONS,
 );
-
-// 当前选中的讯飞模板对象（用于展示预览图）
-const selectedSparkTemplate = computed(
-  () =>
-    sparkTemplates.value.find((t) => t.id === pptForm.value.sparkTemplateId) ||
-    null,
+const pptAssessments = computed(
+  () => subjectTraits(pptForm.value).assessment || ASSESSMENT_OPTIONS,
+);
+const docAssessments = computed(
+  () => subjectTraits(docForm.value).assessment || ASSESSMENT_OPTIONS,
+);
+const quizAssessments = computed(
+  () => subjectTraits(questionForm.value).assessment || ASSESSMENT_OPTIONS,
+);
+const examAssessments = computed(
+  () => subjectTraits(examForm.value).assessment || ASSESSMENT_OPTIONS,
 );
 
 // 当前所选学科对应的教学目标 / 重点难点预设
@@ -194,263 +255,6 @@ const docGoals = computed(
 const docKeys = computed(
   () => subjectPresets[resolveSubjectName(docForm.value)]?.keyPoints || [],
 );
-
-// ==================== 课堂互动数据 ====================
-const activityTab = ref("quick-answer");
-
-const activityTabs = [
-  {
-    id: "quick-answer",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 4 14 10 14 10 22 20 10 14 10 14 2"/></svg>',
-    label: "随堂抢答",
-    desc: "限时竞答",
-  },
-  {
-    id: "poll",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="14" width="4" height="6" rx="1"/><rect x="10" y="8" width="4" height="12" rx="1"/><rect x="16" y="3" width="4" height="17" rx="1"/></svg>',
-    label: "实时投票",
-    desc: "数据决策",
-  },
-  {
-    id: "random-pick",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="15" cy="15" r="1.5" fill="currentColor"/></svg>',
-    label: "随机抽选",
-    desc: "公平互动",
-  },
-  {
-    id: "group-score",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2 2 0 01-2-2V5a2 2 0 012-2H6"/><path d="M18 9h1.5a2 2 0 002-2V5a2 2 0 00-2-2H18"/><path d="M6 3h12v4a6 6 0 01-12 0V3z"/><path d="M12 15v4"/><path d="M8 21h8"/></svg>',
-    label: "小组积分",
-    desc: "团队竞赛",
-  },
-];
-
-const students = ref([
-  { id: 1, name: "张三", avatar: "👦" },
-  { id: 2, name: "李四", avatar: "👧" },
-  { id: 3, name: "王五", avatar: "👨" },
-  { id: 4, name: "赵六", avatar: "👩" },
-  { id: 5, name: "陈七", avatar: "🧑" },
-  { id: 6, name: "刘八", avatar: "👱" },
-  { id: 7, name: "孙九", avatar: "👴" },
-  { id: 8, name: "周十", avatar: "👵" },
-  { id: 9, name: "吴十一", avatar: "🧒" },
-  { id: 10, name: "郑十二", avatar: "🧑‍🎓" },
-]);
-
-const quickAnswerQuestions = ref([
-  {
-    id: 1,
-    question: "光合作用的主要产物是什么？",
-    options: ["氧气", "二氧化碳", "葡萄糖", "水"],
-    correct: 2,
-    explanation: "光合作用的产物是葡萄糖和氧气。",
-    answered: false,
-    timer: 30,
-  },
-  {
-    id: 2,
-    question: "牛顿第二定律的公式是？",
-    options: ["P=MV", "F=ma", "E=mc²", "W=Fs"],
-    correct: 1,
-    explanation: "牛顿第二定律：物体加速度与合外力成正比，F=ma。",
-    answered: false,
-    timer: 30,
-  },
-  {
-    id: 3,
-    question: "细胞的基本结构不包括以下哪个？",
-    options: ["细胞膜", "细胞质", "细胞核", "细胞壁"],
-    correct: 3,
-    explanation: "动物细胞不含细胞壁，植物细胞才具有。",
-    answered: false,
-    timer: 20,
-  },
-]);
-const qaCurrentQuestion = ref(0);
-const qaTimerRunning = ref(false);
-const qaStarted = ref(false);
-const qaTotalTime = ref(0);
-const qaTotalTimeLeft = ref(0);
-const qaSelectedAnswer = ref(-1);
-let qaTimerInterval = null;
-
-const qaLeaderboard = ref([
-  { name: "李四", score: 5, time: 2.3 },
-  { name: "王五", score: 5, time: 3.1 },
-  { name: "张三", score: 4, time: 1.8 },
-  { name: "赵六", score: 3, time: 4.2 },
-  { name: "陈七", score: 3, time: 5.0 },
-]);
-
-const qaAllAnswered = () => quickAnswerQuestions.value.every((q) => q.answered);
-
-function startQATimer() {
-  qaStarted.value = true;
-  qaTimerRunning.value = true;
-  const total = quickAnswerQuestions.value.reduce((sum, q) => sum + q.timer, 0);
-  qaTotalTime.value = total;
-  qaTotalTimeLeft.value = total;
-  qaTimerInterval = setInterval(() => {
-    qaTotalTimeLeft.value--;
-    if (qaTotalTimeLeft.value <= 0) {
-      // time's up — auto-reveal all unanswered questions
-      quickAnswerQuestions.value.forEach((q) => {
-        if (!q.answered) q.answered = true;
-      });
-      stopQATimer();
-    }
-  }, 1000);
-}
-function stopQATimer() {
-  qaTimerRunning.value = false;
-  if (qaTimerInterval) {
-    clearInterval(qaTimerInterval);
-    qaTimerInterval = null;
-  }
-}
-function nextQAQuestion() {
-  // auto-reveal current answer before moving
-  if (!quickAnswerQuestions.value[qaCurrentQuestion.value].answered) {
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered = true;
-  }
-  if (qaAllAnswered()) {
-    stopQATimer();
-    return;
-  }
-  if (qaCurrentQuestion.value < quickAnswerQuestions.value.length - 1) {
-    qaSelectedAnswer.value =
-      quickAnswerQuestions.value[qaCurrentQuestion.value + 1].selected ?? -1;
-    qaCurrentQuestion.value++;
-  }
-}
-function submitQA() {
-  if (!quickAnswerQuestions.value[qaCurrentQuestion.value].answered) {
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered = true;
-  }
-  stopQATimer();
-}
-function prevQAQuestion() {
-  if (qaCurrentQuestion.value > 0) {
-    qaSelectedAnswer.value =
-      quickAnswerQuestions.value[qaCurrentQuestion.value - 1].selected ?? -1;
-    qaCurrentQuestion.value--;
-  }
-}
-function selectQAAnswer(idx) {
-  if (
-    !qaTimerRunning.value ||
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered
-  )
-    return;
-  qaSelectedAnswer.value = qaSelectedAnswer.value === idx ? -1 : idx;
-  quickAnswerQuestions.value[qaCurrentQuestion.value].selected =
-    qaSelectedAnswer.value === -1 ? undefined : qaSelectedAnswer.value;
-}
-function resetQAQuestion() {
-  stopQATimer();
-  qaStarted.value = false;
-  quickAnswerQuestions.value.forEach((q) => {
-    q.answered = false;
-    q.selected = undefined;
-  });
-  qaSelectedAnswer.value = -1;
-  qaCurrentQuestion.value = 0;
-}
-
-const polls = ref([
-  {
-    id: 1,
-    title: "你认为本节课最难理解的概念是什么？",
-    options: [
-      { label: "控制变量法", votes: 12, color: "#667eea" },
-      { label: "牛顿第二定律公式", votes: 8, color: "#10b981" },
-      { label: "实验误差分析", votes: 5, color: "#f59e0b" },
-      { label: "力的合成与分解", votes: 3, color: "#06b6d4" },
-    ],
-    total: 28,
-  },
-  {
-    id: 2,
-    title: "你更喜欢哪种教学方式？",
-    options: [
-      { label: "传统讲授", votes: 5, color: "#667eea" },
-      { label: "小组合作探究", votes: 15, color: "#10b981" },
-      { label: "动手实验", votes: 18, color: "#f59e0b" },
-      { label: "多媒体互动", votes: 10, color: "#06b6d4" },
-    ],
-    total: 48,
-  },
-]);
-const activePollId = ref(1);
-
-const pickHistory = ref([]);
-const pickingStudent = ref(null);
-const isPicking = ref(false);
-const pickIcon = computed(() =>
-  isPicking.value
-    ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="8" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="16" y2="20"/></svg>'
-    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>',
-);
-const pickMode = ref("single");
-function startRandomPick() {
-  if (isPicking.value) return;
-  isPicking.value = true;
-  pickingStudent.value = null;
-  let frame = 0;
-  const totalFrames = 30;
-  const interval = setInterval(() => {
-    pickingStudent.value =
-      students.value[Math.floor(Math.random() * students.value.length)];
-    if (++frame >= totalFrames) {
-      clearInterval(interval);
-      isPicking.value = false;
-      pickHistory.value.unshift({
-        name: pickingStudent.value.name,
-        avatar: pickingStudent.value.avatar,
-        time: new Date().toLocaleTimeString(),
-      });
-    }
-  }, 60);
-}
-function removeStudent(id) {
-  students.value = students.value.filter((s) => s.id !== id);
-}
-
-const groups = ref([
-  {
-    id: 1,
-    name: "第一组",
-    color: "#667eea",
-    score: 85,
-    members: ["张三", "李四", "王五"],
-  },
-  {
-    id: 2,
-    name: "第二组",
-    color: "#10b981",
-    score: 72,
-    members: ["赵六", "陈七"],
-  },
-  {
-    id: 3,
-    name: "第三组",
-    color: "#f59e0b",
-    score: 63,
-    members: ["刘八", "孙九"],
-  },
-  {
-    id: 4,
-    name: "第四组",
-    color: "#06b6d4",
-    score: 91,
-    members: ["周十", "吴十一", "郑十二"],
-  },
-]);
-function addGroupScore(groupId, points) {
-  const g = groups.value.find((x) => x.id === groupId);
-  if (g) g.score += points;
-}
 
 // ==================== 教学档案筛选条件（新版）====================
 const isArchiveFilterExpanded = ref(false);
@@ -559,6 +363,67 @@ const PAGES_SECTION_HINT = {
 // 学段选项（影响内容深度与模版匹配）
 const GRADE_OPTIONS = ["小学低年级", "小学高年级", "初中", "高中"];
 
+// 分步向导：各面板独立记忆当前步骤
+const formStep = ref({ ppt: 0, doc: 0, interactive: 0, exam: 0 });
+const currentFormStep = computed({
+  get: () => formStep.value[activePanel.value] ?? 0,
+  set: (v) => {
+    formStep.value[activePanel.value] = v;
+  },
+});
+
+const PPT_STEPS = [
+  { key: "base", title: "基础信息", desc: "学科 / 课题 / 学段" },
+  { key: "goals", title: "教学目标与学情", desc: "目标 / 重难点 / 学情" },
+  {
+    key: "content",
+    title: "内容结构与呈现",
+    desc: "课时 / 篇幅 / 大纲 / 风格",
+  },
+  { key: "apply", title: "应用与输出", desc: "场景 / 评估 / 生成" },
+];
+const DOC_STEPS = [
+  { key: "base", title: "基础信息", desc: "学科 / 课题 / 学段" },
+  { key: "goals", title: "教学目标与学情", desc: "目标 / 重难点 / 学情" },
+  { key: "process", title: "教学过程设计", desc: "格式 / 风格 / 环节" },
+  { key: "apply", title: "应用与输出", desc: "场景 / 评估 / 生成" },
+];
+const QUIZ_STEPS = [
+  { key: "base", title: "基础信息", desc: "学科 / 知识点 / 学段" },
+  { key: "goals", title: "考查目标与学情", desc: "考查点 / 学情" },
+  { key: "design", title: "题目设计", desc: "难度 / 题量 / 题型" },
+  { key: "apply", title: "应用与输出", desc: "场景 / 评估 / 生成" },
+];
+const EXAM_STEPS = [
+  { key: "base", title: "基础信息", desc: "学科 / 范围 / 学段" },
+  { key: "goals", title: "命题目标与学情", desc: "考查目标 / 学情" },
+  { key: "paper", title: "卷面设计", desc: "难度 / 分值 / 题量" },
+  { key: "apply", title: "应用与输出", desc: "场景 / 评估 / 生成" },
+];
+
+// 教学要素通用选项
+const DURATION_OPTIONS = ["40分钟", "45分钟", "50分钟"];
+const STUDENT_PROFILE_OPTIONS = [
+  "基础薄弱（多支架、多实例、小步走）",
+  "中等水平（讲练结合、落实考点）",
+  "优秀拔高（加变式与思维拓展）",
+];
+const ASSESSMENT_OPTIONS = ["知识点掌握", "思维过程", "应用能力", "综合素养"];
+const USAGE_SCENE = {
+  ppt: ["新授课", "复习课", "公开课", "微课", "示范课"],
+  doc: ["常规备课", "公开课", "评优课", "校本教研"],
+  interactive: ["随堂检测", "课后练习", "单元复习", "分层作业"],
+  exam: ["单元测试", "期中考试", "期末考试", "月考", "模拟考"],
+};
+const LESSON_FOCUS_OPTIONS = ["导入设计", "活动组织", "板书设计", "作业分层"];
+const QUESTION_TYPE_OPTIONS = [
+  "选择 + 填空 + 解答（混合）",
+  "仅选择题",
+  "仅解答题",
+  "计算题为主",
+];
+const DEFAULT_INTERACTIONS = ["提问互动", "小组讨论", "随堂练习", "板书推演"];
+
 /**
  * 各学科预设的教学目标与重点难点模板
  * 用户选择学科后，教学目标/重点难点下拉自动加载对应学科的常用选项，
@@ -575,6 +440,8 @@ const subjectPresets = {
       "教学重点：理解重点语句含义，学习作者观察与表达的方法",
       "教学难点：体会言外之意、把握文章主旨与情感升华",
     ],
+    interactions: ["朗读品味", "小组讨论", "情境表演", "读写结合"],
+    assessment: ["语言积累", "文本理解", "表达运用", "文化感悟"],
   },
   数学: {
     goals: [
@@ -586,6 +453,8 @@ const subjectPresets = {
       "教学重点：掌握例题所涉及的概念、定理及其基本应用",
       "教学难点：理解抽象概念间的联系，灵活运用所学方法解决问题",
     ],
+    interactions: ["问题串引导", "板演推演", "变式训练", "小组探究"],
+    assessment: ["概念理解", "运算能力", "推理能力", "建模应用"],
   },
   英语: {
     goals: [
@@ -597,6 +466,8 @@ const subjectPresets = {
       "教学重点：掌握核心词汇与目标句型，能完成基本会话任务",
       "教学难点：在真实语境中正确、得体地运用目标语言",
     ],
+    interactions: ["情景对话", "听读输入", "角色扮演", "任务型输出"],
+    assessment: ["词汇句型", "语篇理解", "口语表达", "跨文化意识"],
   },
   物理: {
     goals: [
@@ -608,6 +479,8 @@ const subjectPresets = {
       "教学重点：理解核心概念与规律的建立过程及适用条件",
       "教学难点：物理量间的逻辑关系与综合分析、计算能力",
     ],
+    interactions: ["演示实验", "问题探究", "模型建构", "数据推理"],
+    assessment: ["概念规律理解", "实验探究能力", "模型应用", "科学思维"],
   },
   化学: {
     goals: [
@@ -619,6 +492,8 @@ const subjectPresets = {
       "教学重点：掌握核心化学概念与化学方程式的书写、应用",
       "教学难点：从微观本质理解宏观现象，正确分析实验结论",
     ],
+    interactions: ["实验探究", "现象观察", "微观解释", "方程式书写"],
+    assessment: ["概念原理", "实验操作", "微观表征", "证据推理"],
   },
   生物: {
     goals: [
@@ -630,6 +505,8 @@ const subjectPresets = {
       "教学重点：掌握核心概念与结构功能相适应的观点",
       "教学难点：理解生命活动过程的内在机制与相互关系",
     ],
+    interactions: ["观察比较", "结构功能分析", "实验探究", "图示建模"],
+    assessment: ["概念理解", "结构与功能观", "实验探究", "生命观念"],
   },
   历史: {
     goals: [
@@ -641,6 +518,8 @@ const subjectPresets = {
       "教学重点：梳理历史事件的基本线索与关键史实",
       "教学难点：辩证分析历史事件的背景、影响与启示",
     ],
+    interactions: ["史料研读", "时间轴梳理", "事件比较", "情境还原"],
+    assessment: ["史实掌握", "史料实证", "历史解释", "家国情怀"],
   },
   地理: {
     goals: [
@@ -652,6 +531,8 @@ const subjectPresets = {
       "教学重点：掌握核心地理现象、分布规律及成因",
       "教学难点：综合分析自然与人文要素的相互影响",
     ],
+    interactions: ["地图判读", "图表分析", "要素综合", "案例分析"],
+    assessment: ["区域认知", "综合思维", "地理实践力", "人地协调观"],
   },
   政治: {
     goals: [
@@ -663,6 +544,8 @@ const subjectPresets = {
       "教学重点：理解本课核心观点与基本价值导向",
       "教学难点：运用正确立场、观点和方法分析现实问题",
     ],
+    interactions: ["时政案例", "情境辨析", "观点论证", "价值澄清"],
+    assessment: ["概念观点理解", "材料分析", "价值判断", "政治认同"],
   },
 };
 
@@ -679,9 +562,15 @@ const pptForm = ref({
   keyPoints: "",
   keyCustom: "",
   outlineCustom: "", // 自定义章节大纲（可选，每行一个章节）
+  studentProfile: "",
+  studentProfileCustom: "",
+  interactionDesign: "",
+  interactionCustom: "",
+  usageScene: "",
+  usageSceneCustom: "",
+  assessment: "",
+  assessmentCustom: "",
   referenceFile: null,
-  engine: "spark", // 生成引擎：spark(讯飞智文) | local(本地模板)
-  template: "", // 本地 PPT 模版 ID，为空时自动匹配
   sparkTemplateId: "", // 讯飞模板 ID，为空用后端默认模板
   isCardNote: true, // 讯飞：是否生成演讲备注
   isFigure: true, // 讯飞：是否自动配图
@@ -691,29 +580,41 @@ const docForm = ref({
   subject: "",
   subjectCustom: "",
   topic: "",
+  grade: "",
+  duration: "45分钟",
   format: "标准教案",
   style: "实验探究型",
   teachingGoals: "",
   goalCustom: "",
   keyPoints: "",
   keyCustom: "",
+  studentProfile: "",
+  studentProfileCustom: "",
+  lessonFocus: "",
+  lessonFocusCustom: "",
+  usageScene: "",
+  usageSceneCustom: "",
+  assessment: "",
+  assessmentCustom: "",
   referenceFile: null,
 });
 
-// 学科变化时清空教学目标和重点难点，强制用户重新选择
+// 学科变化时自动带入该学科默认教学目标与重难点，减少手动选择；无预设则清空
 watch(
   () => [pptForm.value.subject, docForm.value.subject],
   ([pptSubj, docSubj]) => {
     if (pptSubj !== undefined) {
-      pptForm.value.teachingGoals = "";
+      const preset = subjectPresets[resolveSubjectName(pptForm.value)];
+      pptForm.value.teachingGoals = preset?.goals?.[0] || "";
       pptForm.value.goalCustom = "";
-      pptForm.value.keyPoints = "";
+      pptForm.value.keyPoints = preset?.keyPoints?.[0] || "";
       pptForm.value.keyCustom = "";
     }
     if (docSubj !== undefined) {
-      docForm.value.teachingGoals = "";
+      const preset = subjectPresets[resolveSubjectName(docForm.value)];
+      docForm.value.teachingGoals = preset?.goals?.[0] || "";
       docForm.value.goalCustom = "";
-      docForm.value.keyPoints = "";
+      docForm.value.keyPoints = preset?.keyPoints?.[0] || "";
       docForm.value.keyCustom = "";
     }
   },
@@ -721,11 +622,21 @@ watch(
 
 const questionForm = ref({
   subject: "",
+  subjectCustom: "",
   topic: "",
   stage: "高中",
   difficulty: "综合提升",
   count: 8,
   scenario: "随堂检测",
+  scenarioCustom: "",
+  target: "",
+  targetCustom: "",
+  studentProfile: "",
+  studentProfileCustom: "",
+  questionTypes: "",
+  questionTypesCustom: "",
+  assessment: "",
+  assessmentCustom: "",
 });
 
 const commonSubjects = [
@@ -742,6 +653,7 @@ const commonSubjects = [
 
 const examForm = ref({
   subject: "",
+  subjectCustom: "",
   topic: "",
   grade: "高中",
   difficulty: "中等",
@@ -750,6 +662,14 @@ const examForm = ref({
   fillCount: 6,
   essayCount: 4,
   generateAB: false,
+  target: "",
+  targetCustom: "",
+  studentProfile: "",
+  studentProfileCustom: "",
+  usageScene: "",
+  usageSceneCustom: "",
+  assessment: "",
+  assessmentCustom: "",
 });
 
 const examPreviewStructure = {
@@ -772,13 +692,14 @@ const examPreviewStructure = {
 
 const navGroups = [
   {
-    label: "✨ 内容生成",
+    label: "内容生成",
+    featured: true,
     items: [
       {
         id: "ppt",
         label: "课件制作",
         icon: "ppt",
-        desc: "套用精美模版，AI 自动填充课件内容",
+        desc: "套用精美模版，自动填充课件内容",
       },
       {
         id: "doc",
@@ -797,23 +718,6 @@ const navGroups = [
         label: "试卷生成",
         icon: "exam",
         desc: "混合题型组卷，支持A/B卷与答题卡",
-      },
-    ],
-  },
-  {
-    label: "教学实施",
-    items: [
-      {
-        id: "classroom",
-        label: "课堂互动",
-        icon: "classroom",
-        desc: "随堂投票、抢答、抽选等互动功能",
-      },
-      {
-        id: "feedback",
-        label: "学情反馈",
-        icon: "feedback",
-        desc: "收集学生反馈，调整教学策略",
       },
     ],
   },
@@ -842,32 +746,26 @@ const panelTitles = {
   doc: "教案编写",
   interactive: "课堂练习",
   exam: "试卷生成",
-  classroom: "课堂互动",
-  feedback: "学情反馈",
   history: "教学档案",
   iterate: "教学反思",
 };
 
 const panelSubtitles = {
   overview: "概览任务状态与创作节奏，快速进入工作流",
-  ppt: "选择预设风格模版，AI 自动套用精美版式生成课件",
-  doc: "描述教学目标，AI 辅助编写完整教案",
-  interactive: "根据知识点智能出题，支持分层练习",
+  ppt: "选择预设风格模版，自动套用精美版式生成课件",
+  doc: "描述教学目标，编写完整教案",
+  interactive: "根据知识点出题，支持分层练习",
   exam: "选择题+填空题+解答题混合组卷，一键生成A/B卷",
-  classroom: "投屏互动、实时反馈，让课堂「活」起来",
-  feedback: "学情数据可视化，精准定位薄弱环节",
   history: "查看历史生成记录，支持复用与迭代",
   iterate: "记录教学心得，持续优化内容质量",
 };
 
 const panelChips = {
-  overview: "知启灵枢 · AI 教学创作台",
-  ppt: "知启灵枢 · 智能课件生成",
-  doc: "知启灵枢 · AI 教案编写",
-  interactive: "知启灵枢 · 智能出题",
-  exam: "知启灵枢 · 智能组卷",
-  classroom: "知启灵枢 · 课堂互动",
-  feedback: "知启灵枢 · 学情分析",
+  overview: "知启灵枢 · 教学创作台",
+  ppt: "知启灵枢 · 课件制作",
+  doc: "知启灵枢 · 教案编写",
+  interactive: "知启灵枢 · 课堂练习",
+  exam: "知启灵枢 · 试卷生成",
   history: "知启灵枢 · 教学档案",
   iterate: "知启灵枢 · 教学反思",
 };
@@ -890,11 +788,6 @@ const featureIcons = {
     "M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM10 10h.01",
   ],
   multimodal: ["M4.5 15.5h11", "M6 9.5 10 5l4 4.5M10 5v8.5"],
-  classroom: ["M4 6.5h12v8H4v-8z", "M8 9.5h4M8 12.5h4", "M15 8.5l3-2v6l-3-2"],
-  feedback: [
-    "M10 3.5a7 7 0 0 1 7 7c0 3-2 5-4 6l-3 2-3-2c-2-1-4-3-4-6a7 7 0 0 1 7-7z",
-    "M10 8.5v3M10 13.5h.01",
-  ],
   history: ["M10 4.5v5l3 1.5", "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14z"],
   iterate: [
     "M15.5 7.5A5.5 5.5 0 0 0 6 5l-1.5 1.5M4.5 3.5v3h3",
@@ -2014,7 +1907,7 @@ const taskMoments = computed(() => [
       ? "1个"
       : `${Math.max(stats.value.iterating, 1)}个`,
     detail: isGenerating.value
-      ? "AI 正在整理内容结构与推荐目录"
+      ? "正在整理内容结构与推荐目录"
       : "待优化内容会在这里形成下一步动作",
   },
   {
@@ -2676,11 +2569,12 @@ const typeToApiType = {
 };
 
 async function callApiGenerate(apiType, params) {
+  const panel = panelByApiType[apiType] || "ppt";
   isGenerating.value = true;
-  showProgress.value = true;
   currentTaskProgress.value = 0;
   currentTaskStage.value = "启动中…";
   generatedFilename.value = "";
+  reviseMessages.value[panel] = [];
 
   try {
     const { taskId } = await submitCoursewareTask({
@@ -2700,7 +2594,9 @@ async function callApiGenerate(apiType, params) {
       },
       onComplete: (data) => {
         isGenerating.value = false;
-        showToast(`✅ 生成完成：${data.filename}`);
+        generatedFilename.value = data.filename || "";
+        pushInitialMessage(panel, data.filename);
+        showToast(`生成完成：${data.filename}`);
 
         // 将新记录写入历史列表（localStorage）
         // API type 映射: quiz → interactive, exam → exam
@@ -2716,23 +2612,29 @@ async function callApiGenerate(apiType, params) {
 
         history.value = getHistory();
         stats.value = getStats();
-
-        activePanel.value = "history";
-        // 延迟隐藏进度条
-        setTimeout(() => {
-          showProgress.value = false;
-        }, 3000);
       },
       onError: (err) => {
         isGenerating.value = false;
-        showProgress.value = false;
-        showToast(`❌ 生成失败：${err.message}`);
+        reviseMessages.value[panel] = [
+          {
+            id: nextReviseId(),
+            role: "assistant",
+            text: `生成失败：${err.message}`,
+          },
+        ];
+        showToast(`生成失败：${err.message}`);
       },
     });
   } catch (err) {
     isGenerating.value = false;
-    showProgress.value = false;
-    showToast(`❌ 提交失败：${err.message}`);
+    reviseMessages.value[panel] = [
+      {
+        id: nextReviseId(),
+        role: "assistant",
+        text: `提交失败：${err.message}`,
+      },
+    ];
+    showToast(`提交失败：${err.message}`);
   }
 }
 
@@ -2741,8 +2643,7 @@ function handlePptGenerate() {
   if (!pptForm.value.topic.trim()) return showToast("请先填写课题名称");
   const subject = resolveSubjectName(pptForm.value);
   if (!subject) return showToast("请选择学科");
-  if (!pptForm.value.grade)
-    return showToast("请选择学段（用于匹配模版与内容深度）");
+  if (!pptForm.value.grade) return showToast("请选择学段");
   const goals = resolveText(
     pptForm.value.teachingGoals,
     pptForm.value.goalCustom,
@@ -2751,8 +2652,28 @@ function handlePptGenerate() {
   if (!goals.trim()) return showToast("请选择或填写教学目标");
   if (!keys.trim()) return showToast("请选择或填写重点与难点");
 
-  // 组装结构化大纲：含教学目标、重难点、篇幅约束、可选章节结构
+  const student = resolveText(
+    pptForm.value.studentProfile,
+    pptForm.value.studentProfileCustom,
+  );
+  const interaction = resolveText(
+    pptForm.value.interactionDesign,
+    pptForm.value.interactionCustom,
+  );
+  const scene = resolveText(
+    pptForm.value.usageScene,
+    pptForm.value.usageSceneCustom,
+  );
+  const assess = resolveText(
+    pptForm.value.assessment,
+    pptForm.value.assessmentCustom,
+  );
+
   const outlineParts = [`教学目标：${goals}`, `重点与难点：${keys}`];
+  if (student.trim()) outlineParts.push(`学生学情：${student}`);
+  if (interaction.trim()) outlineParts.push(`课堂互动设计：${interaction}`);
+  if (scene.trim()) outlineParts.push(`使用场景：${scene}`);
+  if (assess.trim()) outlineParts.push(`评估侧重：${assess}`);
   const pagesHint = PAGES_SECTION_HINT[pptForm.value.pages] || "";
   if (pagesHint)
     outlineParts.push(`课件篇幅：${pptForm.value.pages}，${pagesHint}`);
@@ -2772,17 +2693,18 @@ function handlePptGenerate() {
       `请严格按照以下章节结构组织课件内容，每章一节扉页：\n${sections.join("\n")}`,
     );
   }
-  const engine = pptForm.value.engine === "local" ? "local" : "spark";
   callApiGenerate("ppt", {
     subject,
     topic: pptForm.value.topic,
     grade: pptForm.value.grade,
+    duration: pptForm.value.duration,
     style: pptForm.value.style || "实验探究型",
     outline: outlineParts.join("；"),
-    engine,
-    template: engine === "local" ? pptForm.value.template || "" : "",
-    sparkTemplateId:
-      engine === "spark" ? pptForm.value.sparkTemplateId || "" : "",
+    studentProfile: student,
+    interactionDesign: interaction,
+    usageScene: scene,
+    assessment: assess,
+    sparkTemplateId: pptForm.value.sparkTemplateId || "",
     isCardNote: pptForm.value.isCardNote,
     isFigure: pptForm.value.isFigure,
   });
@@ -2793,6 +2715,7 @@ function handleDocGenerate() {
   if (!docForm.value.topic.trim()) return showToast("请先填写课题名称");
   const subject = resolveSubjectName(docForm.value);
   if (!subject) return showToast("请选择学科");
+  if (!docForm.value.grade) return showToast("请选择学段");
   const goals = resolveText(
     docForm.value.teachingGoals,
     docForm.value.goalCustom,
@@ -2800,33 +2723,110 @@ function handleDocGenerate() {
   const keys = resolveText(docForm.value.keyPoints, docForm.value.keyCustom);
   if (!goals.trim()) return showToast("请选择或填写教学目标");
   if (!keys.trim()) return showToast("请选择或填写重点与难点");
+
+  const student = resolveText(
+    docForm.value.studentProfile,
+    docForm.value.studentProfileCustom,
+  );
+  const focus = resolveText(
+    docForm.value.lessonFocus,
+    docForm.value.lessonFocusCustom,
+  );
+  const scene = resolveText(
+    docForm.value.usageScene,
+    docForm.value.usageSceneCustom,
+  );
+  const assess = resolveText(
+    docForm.value.assessment,
+    docForm.value.assessmentCustom,
+  );
+
+  const parts = [
+    docForm.value.format || "标准教案",
+    docForm.value.style || "",
+    `教学目标：${goals}`,
+    `重点与难点：${keys}`,
+  ];
+  if (student.trim()) parts.push(`学生学情：${student}`);
+  if (focus.trim()) parts.push(`教学环节侧重：${focus}`);
+  if (scene.trim()) parts.push(`使用场景：${scene}`);
+  if (assess.trim()) parts.push(`评估侧重：${assess}`);
+
   callApiGenerate("doc", {
     subject,
     topic: docForm.value.topic,
-    grade: "",
-    requirements: `${docForm.value.format || "标准教案"} | ${docForm.value.style || ""} | 教学目标：${goals} | 重点与难点：${keys}`,
+    grade: docForm.value.grade,
+    duration: docForm.value.duration,
+    requirements: parts.join(" | "),
+    studentProfile: student,
+    lessonFocus: focus,
+    usageScene: scene,
+    assessment: assess,
   });
 }
 
 // 教学题生成
 function handleQuestionGenerate() {
   if (!questionForm.value.topic.trim()) return showToast("请先填写知识点");
+  const subject = resolveSubjectName(questionForm.value);
+  if (!subject) return showToast("请选择学科");
+  const target = resolveText(
+    questionForm.value.target,
+    questionForm.value.targetCustom,
+  );
+  const student = resolveText(
+    questionForm.value.studentProfile,
+    questionForm.value.studentProfileCustom,
+  );
+  const qtypes = resolveText(
+    questionForm.value.questionTypes,
+    questionForm.value.questionTypesCustom,
+  );
+  const assess = resolveText(
+    questionForm.value.assessment,
+    questionForm.value.assessmentCustom,
+  );
+  const scenario = resolveText(
+    questionForm.value.scenario,
+    questionForm.value.scenarioCustom,
+  );
   callApiGenerate("quiz", {
-    subject: questionForm.value.subject || "未分类",
+    subject,
     topic: questionForm.value.topic,
     grade: questionForm.value.stage || "高中",
     difficulty: questionForm.value.difficulty || "综合提升",
-    scenario: questionForm.value.scenario || "随堂检测",
+    scenario: scenario || "随堂检测",
     count: questionForm.value.count || 8,
+    questionTypes: qtypes,
+    target,
+    studentProfile: student,
+    assessment: assess,
   });
 }
 
 function handleExamGenerate() {
   if (!examForm.value.topic.trim())
     return showToast("请先填写知识点或考试范围");
-  if (!examForm.value.subject.trim()) return showToast("请填写学科");
+  const subject = resolveSubjectName(examForm.value);
+  if (!subject) return showToast("请选择学科");
+  const target = resolveText(
+    examForm.value.target,
+    examForm.value.targetCustom,
+  );
+  const student = resolveText(
+    examForm.value.studentProfile,
+    examForm.value.studentProfileCustom,
+  );
+  const scene = resolveText(
+    examForm.value.usageScene,
+    examForm.value.usageSceneCustom,
+  );
+  const assess = resolveText(
+    examForm.value.assessment,
+    examForm.value.assessmentCustom,
+  );
   callApiGenerate("exam", {
-    subject: examForm.value.subject,
+    subject,
     topic: examForm.value.topic,
     grade: examForm.value.grade,
     difficulty: examForm.value.difficulty,
@@ -2835,6 +2835,10 @@ function handleExamGenerate() {
     fillCount: examForm.value.fillCount,
     essayCount: examForm.value.essayCount,
     generateAB: examForm.value.generateAB,
+    usageScene: scene,
+    assessment: assess,
+    target,
+    studentProfile: student,
   });
 }
 
@@ -3249,20 +3253,12 @@ async function applyAssistantContent(type, content) {
 
 // 生命周期钩子
 onMounted(() => {
-  // 加载 PPT 模版列表
-  fetchPptTemplates();
   // 加载讯飞智文模板（仅元数据，不消耗额度）
   fetchSparkTemplates();
-  // 处理路由参数：预选模版和面板
+  // 处理路由参数：面板
   const queryPanel = route.query.panel;
-  const queryTemplate = route.query.template;
   if (queryPanel) {
     activePanel.value = queryPanel;
-  }
-  if (queryTemplate) {
-    pptForm.value.template = queryTemplate;
-    // 路由带了本地模版 ID，切到本地引擎，避免被讯飞引擎忽略
-    pptForm.value.engine = "local";
   }
   // 处理 AI 助手「转入生成」跳转参数：type=topic/outline 自动预填
   const queryType = route.query.type;
@@ -3348,7 +3344,7 @@ onUnmounted(() => {
         </RouterLink>
         <div class="sidebar__brand">
           <span class="sidebar__brand-name">核心功能</span>
-          <span class="sidebar__brand-sub">多模态 AI 教学创作工作台</span>
+          <span class="sidebar__brand-sub">多模态教学创作工作台</span>
         </div>
       </div>
 
@@ -3398,7 +3394,12 @@ onUnmounted(() => {
         核心功能概览
       </button>
 
-      <nav v-for="group in navGroups" :key="group.label" class="nav-group">
+      <nav
+        v-for="group in navGroups"
+        :key="group.label"
+        class="nav-group"
+        :class="{ 'nav-group--featured': group.featured }"
+      >
         <p class="nav-group__label">{{ group.label }}</p>
         <button
           v-for="item in group.items"
@@ -3944,498 +3945,360 @@ onUnmounted(() => {
           class="panel"
           data-panel="ppt"
         >
-          <!-- 生成进度条 -->
-          <div v-if="showProgress" class="progress-bar-wrap">
-            <div class="progress-bar__header">
-              <span class="progress-bar__stage">{{ currentTaskStage }}</span>
-              <span class="progress-bar__pct">{{ currentTaskProgress }}%</span>
-            </div>
-            <div class="progress-bar__track">
-              <div
-                class="progress-bar__fill"
-                :style="{ width: currentTaskProgress + '%' }"
-              />
-            </div>
-            <div v-if="generatedFilename" class="progress-bar__done">
-              ✅ 文件已生成：
-              <a
-                href="javascript:;"
-                @click="downloadFile(currentTaskId, generatedFilename)"
-                >{{ generatedFilename }}</a
-              >
-            </div>
-          </div>
-
           <div class="generator-layout">
             <article class="form-card">
               <div class="section-head">
                 <div>
                   <span class="section-tag">Prompt Workspace</span>
-                  <h2>智能课件生成</h2>
+                  <h2>课件制作</h2>
                 </div>
               </div>
 
-              <div class="form-row">
-                <label>
-                  学科
-                  <select v-model="pptForm.subject">
-                    <option value="" disabled>请选择学科</option>
-                    <option v-for="s in commonSubjects" :key="s" :value="s">
-                      {{ s }}
-                    </option>
-                    <option :value="CUSTOM_OPTION">自定义学科…</option>
-                  </select>
-                  <textarea
-                    v-if="pptForm.subject === CUSTOM_OPTION"
-                    v-model="pptForm.subjectCustom"
-                    rows="1"
-                    placeholder="请输入学科名称"
-                  ></textarea>
-                </label>
+              <FormWizard :steps="PPT_STEPS" v-model="currentFormStep">
+                <template #base>
+                  <div class="form-row">
+                    <label>
+                      学科
+                      <select v-model="pptForm.subject">
+                        <option value="" disabled>请选择学科</option>
+                        <option v-for="s in commonSubjects" :key="s" :value="s">
+                          {{ s }}
+                        </option>
+                        <option :value="CUSTOM_OPTION">自定义学科…</option>
+                      </select>
+                      <textarea
+                        v-if="pptForm.subject === CUSTOM_OPTION"
+                        v-model="pptForm.subjectCustom"
+                        rows="1"
+                        placeholder="请输入学科名称"
+                      ></textarea>
+                    </label>
 
-                <label>
-                  课题
-                  <input
-                    v-model="pptForm.topic"
-                    type="text"
-                    placeholder="例如：牛顿第二定律"
-                  />
-                </label>
-              </div>
-
-              <div class="form-row">
-                <label>
-                  学段
-                  <select v-model="pptForm.grade">
-                    <option value="" disabled>请选择学段</option>
-                    <option v-for="g in GRADE_OPTIONS" :key="g" :value="g">
-                      {{ g }}
-                    </option>
-                  </select>
-                  <small class="field-hint">决定内容深度与模版匹配</small>
-                </label>
-                <label>
-                  课时长度
-                  <select v-model="pptForm.duration">
-                    <option>40分钟</option>
-                    <option>45分钟</option>
-                    <option>50分钟</option>
-                  </select>
-                </label>
-              </div>
-
-              <label>
-                讲授风格
-                <select v-model="pptForm.style">
-                  <option>实验探究型</option>
-                  <option>讲授演示型</option>
-                  <option>问题驱动型</option>
-                  <option>翻转课堂型</option>
-                </select>
-              </label>
-
-              <label>
-                课件篇幅
-                <select v-model="pptForm.pages">
-                  <option>精炼</option>
-                  <option>标准</option>
-                  <option>充实</option>
-                </select>
-                <small class="field-hint">{{
-                  PAGES_SECTION_HINT[pptForm.pages]
-                }}</small>
-              </label>
-
-              <label>
-                章节大纲（可选）
-                <textarea
-                  v-model="pptForm.outlineCustom"
-                  rows="3"
-                  placeholder="每行一个章节，AI 将严格按此组织课件内容，例如：&#10;认识图形与分类&#10;图形的拼组与变换&#10;生活中的图形应用"
-                ></textarea>
-                <small class="field-hint"
-                  >留空则由 AI 自动设计章节；填写后更贴合模版槽位，建议 2-4
-                  个章节</small
-                >
-              </label>
-
-              <!-- 生成引擎切换 -->
-              <div class="engine-switch">
-                <div class="engine-switch__head">
-                  <span class="engine-switch__title">PPT 生成引擎</span>
-                  <span class="engine-switch__hint">
-                    {{
-                      pptForm.engine === "spark"
-                        ? "AI 智能排版 + 自动配图，效果更精美"
-                        : "按预设版式快速生成，稳定可预期"
-                    }}
-                  </span>
-                </div>
-                <div class="engine-switch__options">
-                  <button
-                    type="button"
-                    class="engine-switch__btn"
-                    :class="{ 'is-active': pptForm.engine === 'spark' }"
-                    @click="pptForm.engine = 'spark'"
-                  >
-                    讯飞智文
-                  </button>
-                  <button
-                    type="button"
-                    class="engine-switch__btn"
-                    :class="{ 'is-active': pptForm.engine === 'local' }"
-                    @click="pptForm.engine = 'local'"
-                  >
-                    本地模板
-                  </button>
-                </div>
-              </div>
-
-              <!-- 讯飞智文参数 -->
-              <div
-                v-if="pptForm.engine === 'spark'"
-                class="template-select-section"
-              >
-                <label class="template-select__label">
-                  讯飞 PPT 模板
-                  <span class="template-select__hint"
-                    >— 由讯飞智文按模板自动排版</span
-                  >
-                </label>
-                <select
-                  v-model="pptForm.sparkTemplateId"
-                  class="template-select__dropdown"
-                >
-                  <option value="">使用默认模板（推荐）</option>
-                  <option v-for="t in sparkTemplates" :key="t.id" :value="t.id">
-                    {{ t.name }} — {{ t.industry }}
-                  </option>
-                </select>
-
-                <div v-if="sparkTemplateLoading" class="engine-note">
-                  正在加载讯飞模板列表…
-                </div>
-                <div
-                  v-else-if="sparkTemplateError"
-                  class="engine-note engine-note--warn"
-                >
-                  {{ sparkTemplateError }}
-                </div>
-
-                <!-- 翻页（上游固定每页 10 条） -->
-                <div v-if="sparkTemplateTotal" class="template-pager">
-                  <button
-                    type="button"
-                    class="template-pager__btn"
-                    :disabled="sparkTemplatePage <= 1 || sparkTemplateLoading"
-                    @click="fetchSparkTemplates(sparkTemplatePage - 1)"
-                  >
-                    上一页
-                  </button>
-                  <span class="template-pager__info">
-                    第 {{ sparkTemplatePage }} / {{ sparkTotalPages }} 页 · 共
-                    {{ sparkTemplateTotal }} 个模板
-                  </span>
-                  <button
-                    type="button"
-                    class="template-pager__btn"
-                    :disabled="
-                      sparkTemplatePage >= sparkTotalPages ||
-                      sparkTemplateLoading
-                    "
-                    @click="fetchSparkTemplates(sparkTemplatePage + 1)"
-                  >
-                    下一页
-                  </button>
-                </div>
-
-                <!-- 选中模板预览 -->
-                <div v-if="selectedSparkTemplate" class="template-preview">
-                  <img
-                    v-if="selectedSparkTemplate.preview"
-                    :src="previewUrl(selectedSparkTemplate.preview)"
-                    alt="模板预览"
-                    class="template-preview__img"
-                  />
-                  <div class="template-preview__meta">
-                    <span class="template-preview__badge">讯飞模板</span>
-                    <span class="template-preview__desc">
-                      {{ selectedSparkTemplate.name }}
-                      <template v-if="selectedSparkTemplate.industry">
-                        · {{ selectedSparkTemplate.industry }}
-                      </template>
-                    </span>
+                    <label>
+                      学段
+                      <select v-model="pptForm.grade">
+                        <option value="" disabled>请选择学段</option>
+                        <option v-for="g in GRADE_OPTIONS" :key="g" :value="g">
+                          {{ g }}
+                        </option>
+                      </select>
+                      <small class="field-hint">决定内容深度与模版匹配</small>
+                    </label>
                   </div>
-                </div>
 
-                <!-- 备注 / 配图开关 -->
-                <div class="engine-options">
-                  <label class="engine-options__item">
-                    <input type="checkbox" v-model="pptForm.isCardNote" />
-                    生成演讲备注
-                  </label>
-                  <label class="engine-options__item">
-                    <input type="checkbox" v-model="pptForm.isFigure" />
-                    自动配图
-                  </label>
-                </div>
-                <small class="field-hint"
-                  >开启备注与配图会消耗更多讯飞额度（约 17 点/次）</small
-                >
-              </div>
-
-              <!-- PPT 模版选择（本地引擎） -->
-              <div v-else class="template-select-section">
-                <label class="template-select__label">
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    style="vertical-align: -2px; margin-right: 4px"
-                  >
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <line x1="3" y1="9" x2="21" y2="9" />
-                    <line x1="9" y1="21" x2="9" y2="9" />
-                  </svg>
-                  PPT 风格模版
-                  <span class="template-select__hint"
-                    >— 选取预设模版，AI 只改内容不改设计</span
-                  >
-                </label>
-                <select
-                  v-model="pptForm.template"
-                  class="template-select__dropdown"
-                >
-                  <option value="">智能匹配（根据学科自动选择）</option>
-                  <option v-for="t in pptTemplates" :key="t.id" :value="t.id">
-                    {{ t.name }} — {{ t.description }}
-                    {{ t.engine === "skill" ? "【精品】" : "" }}
-                  </option>
-                </select>
-                <!-- 自动匹配提示 -->
-                <div
-                  v-if="!pptForm.template && autoMatchedTemplate"
-                  class="template-auto-hint"
-                >
-                  <span
-                    >检测到学科「{{ resolveSubjectName(pptForm) }}」，将自动套用
-                    <strong>「{{ autoMatchedTemplate.name }}」</strong>
-                    模版风格</span
-                  >
-                </div>
-                <div
-                  v-else-if="!pptForm.template && pptForm.subject"
-                  class="template-auto-hint template-auto-hint--fallback"
-                >
-                  <span>将使用通用模版生成，也可在上方手动指定模版</span>
-                </div>
-                <!-- 已选中模版的预览图 -->
-                <div v-if="selectedPptTemplate" class="template-preview">
-                  <img
-                    v-if="selectedPptTemplate.preview"
-                    :src="previewUrl(selectedPptTemplate.preview)"
-                    alt="模版预览"
-                    class="template-preview__img"
-                  />
-                  <div class="template-preview__meta">
-                    <span class="template-preview__badge">
-                      {{
-                        selectedPptTemplate.engine === "skill"
-                          ? "精品模板"
-                          : "标准模板"
-                      }}
-                    </span>
-                    <span class="template-preview__desc">{{
-                      selectedPptTemplate.description
-                    }}</span>
-                    <span
-                      v-if="skillTemplateCapacity"
-                      class="template-preview__capacity"
-                    >
-                      该精品模版版式容量：约
-                      {{ skillTemplateCapacity.maxSections }} 个章节扉页、{{
-                        skillTemplateCapacity.maxContentPages
-                      }}
-                      页内容，建议选择「标准」篇幅并填写章节大纲
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 教学目标 -->
-              <div class="objectives-card">
-                <div class="objectives-card__header">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <circle cx="12" cy="12" r="6" />
-                    <circle cx="12" cy="12" r="2" fill="currentColor" />
-                  </svg>
-                  教学目标与重难点
-                </div>
-                <div class="objectives-card__body">
                   <label>
-                    教学目标
-                    <select v-model="pptForm.teachingGoals">
-                      <option value="" disabled>
-                        {{
-                          pptGoals.length ? "请选择教学目标" : "请先选择学科"
-                        }}
+                    课题
+                    <input
+                      v-model="pptForm.topic"
+                      type="text"
+                      placeholder="例如：牛顿第二定律"
+                    />
+                  </label>
+                </template>
+
+                <template #content>
+                  <div class="form-row">
+                    <label>
+                      课时长度
+                      <select v-model="pptForm.duration">
+                        <option
+                          v-for="d in DURATION_OPTIONS"
+                          :key="d"
+                          :value="d"
+                        >
+                          {{ d }}
+                        </option>
+                      </select>
+                      <small class="field-hint">本节课堂时长</small>
+                    </label>
+                    <label>
+                      课件篇幅
+                      <select v-model="pptForm.pages">
+                        <option value="精炼">精炼（2-3 章，导入/短课）</option>
+                        <option value="标准">标准（3-4 章，常规课）</option>
+                        <option value="充实">
+                          充实（4 章，公开课/示范课）
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  <small class="field-hint">{{
+                    PAGES_SECTION_HINT[pptForm.pages]
+                  }}</small>
+
+                  <label>
+                    章节大纲（可选）
+                    <textarea
+                      v-model="pptForm.outlineCustom"
+                      rows="3"
+                      placeholder="每行一个章节，将严格按此组织课件内容，例如：&#10;认识图形与分类&#10;图形的拼组与变换&#10;生活中的图形应用"
+                    ></textarea>
+                    <small class="field-hint"
+                      >留空则由系统自动设计章节；填写后更贴合模版槽位，建议 2-4
+                      个章节</small
+                    >
+                  </label>
+
+                  <label>
+                    讲授风格
+                    <select v-model="pptForm.style">
+                      <option value="实验探究型">
+                        实验探究型（实验/观察 → 归纳结论）
                       </option>
-                      <option v-for="g in pptGoals" :key="g" :value="g">
-                        {{ g }}
+                      <option value="讲授演示型">
+                        讲授演示型（讲解为主，配合演示）
                       </option>
-                      <option :value="CUSTOM_OPTION">自定义目标…</option>
+                      <option value="问题驱动型">
+                        问题驱动型（用问题串层层推进）
+                      </option>
+                      <option value="翻转课堂型">
+                        翻转课堂型（课前自学，课上研讨）
+                      </option>
+                    </select>
+                    <small class="field-hint">决定课件的内容组织主线</small>
+                  </label>
+
+                  <label>
+                    互动设计
+                    <select v-model="pptForm.interactionDesign">
+                      <option value="" disabled>请选择互动设计</option>
+                      <option
+                        v-for="it in pptInteractions"
+                        :key="it"
+                        :value="it"
+                      >
+                        {{ it }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
                     </select>
                     <textarea
-                      v-if="pptForm.teachingGoals === CUSTOM_OPTION"
-                      v-model="pptForm.goalCustom"
+                      v-if="pptForm.interactionDesign === CUSTOM_OPTION"
+                      v-model="pptForm.interactionCustom"
                       rows="2"
-                      placeholder="请输入本节课的教学目标…"
+                      placeholder="请描述课堂互动设计…"
                     ></textarea>
                   </label>
-                  <label>
-                    重点与难点
-                    <select v-model="pptForm.keyPoints">
-                      <option value="" disabled>
-                        {{
-                          pptKeys.length ? "请选择重点与难点" : "请先选择学科"
-                        }}
-                      </option>
-                      <option v-for="k in pptKeys" :key="k" :value="k">
-                        {{ k }}
-                      </option>
-                      <option :value="CUSTOM_OPTION">自定义重难点…</option>
-                    </select>
-                    <textarea
-                      v-if="pptForm.keyPoints === CUSTOM_OPTION"
-                      v-model="pptForm.keyCustom"
-                      rows="2"
-                      placeholder="请输入重点与难点…"
-                    ></textarea>
-                  </label>
-                </div>
-              </div>
+                </template>
 
-              <!-- 参考课件上传 -->
-              <label class="form-section-title">📎 参考课件（可选）</label>
-              <div
-                class="file-upload-area"
-                @click="triggerPptFileUpload"
-                @drop="handlePptFileDrop"
-                @dragover.prevent
-              >
-                <input
-                  ref="pptFileInput"
-                  type="file"
-                  accept=".ppt,.pptx,.pdf"
-                  style="display: none"
-                  @change="handlePptFileChange"
-                />
-                <div v-if="!pptForm.referenceFile" class="upload-placeholder">
-                  <span class="upload-icon"
-                    ><svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <path
-                        d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
-                      /></svg
-                  ></span>
-                  <p>点击或拖拽上传参考课件</p>
-                  <small>支持 PPT、PPTX、PDF 格式</small>
-                </div>
-                <div v-else class="uploaded-file">
-                  <span class="file-icon">📄</span>
-                  <span class="file-name">{{
-                    pptForm.referenceFile.name
-                  }}</span>
-                  <button
-                    type="button"
-                    class="remove-file"
-                    @click.stop="removePptFile"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-
-              <div class="chip-row">
-                <button type="button" class="chip-row__chip">情境导入</button>
-                <button type="button" class="chip-row__chip">板书提示</button>
-                <button type="button" class="chip-row__chip">课堂追问</button>
-              </div>
-
-              <button
-                class="btn-primary"
-                :disabled="isGenerating"
-                @click="handlePptGenerate"
-              >
-                {{ isGenerating ? "AI 正在生成课件..." : "开始生成课件" }}
-              </button>
-            </article>
-
-            <article class="preview-card preview-card--rich">
-              <div class="preview-card__chrome">
-                <span />
-                <span />
-                <span />
-                <em>实时目录预览</em>
-              </div>
-
-              <div class="preview-card__body">
-                <div class="preview-card__head">
-                  <div>
-                    <span class="preview-card__eyebrow">推荐结构</span>
-                    <h3>{{ pptForm.topic || "等待填写课题" }}</h3>
-                    <p>
-                      {{ pptForm.style }} ·
-                      {{ resolveSubjectName(pptForm) || "待填写学科" }}
-                    </p>
-                  </div>
-                </div>
-
-                <div class="recommendation-list">
-                  <article
-                    v-for="item in pptRecommendation"
-                    :key="item.index"
-                    class="recommendation-item"
-                  >
-                    <span>{{ item.index }}</span>
-                    <div>
-                      <strong>{{ item.title }}</strong>
-                      <p>{{ item.note }}</p>
+                <!-- 教学目标 -->
+                <template #goals>
+                  <div class="objectives-card">
+                    <div class="objectives-card__header">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <circle cx="12" cy="12" r="10" />
+                        <circle cx="12" cy="12" r="6" />
+                        <circle cx="12" cy="12" r="2" fill="currentColor" />
+                      </svg>
+                      教学目标与重难点
                     </div>
-                  </article>
-                </div>
-                <div
-                  class="ai-badge"
-                  :class="{ 'ai-badge--active': isGenerating }"
-                >
-                  <i />
-                  {{ isGenerating ? "生成中" : "配置完成" }}
-                </div>
-              </div>
+                    <div class="objectives-card__body">
+                      <label>
+                        教学目标
+                        <select v-model="pptForm.teachingGoals">
+                          <option value="" disabled>请选择教学目标</option>
+                          <option v-for="g in pptGoals" :key="g" :value="g">
+                            {{ g }}
+                          </option>
+                          <option :value="CUSTOM_OPTION">自定义目标…</option>
+                        </select>
+                        <textarea
+                          v-if="pptForm.teachingGoals === CUSTOM_OPTION"
+                          v-model="pptForm.goalCustom"
+                          rows="2"
+                          placeholder="请输入本节课的教学目标…"
+                        ></textarea>
+                      </label>
+                      <label>
+                        重点与难点
+                        <select v-model="pptForm.keyPoints">
+                          <option value="" disabled>请选择重点与难点</option>
+                          <option v-for="k in pptKeys" :key="k" :value="k">
+                            {{ k }}
+                          </option>
+                          <option :value="CUSTOM_OPTION">自定义重难点…</option>
+                        </select>
+                        <textarea
+                          v-if="pptForm.keyPoints === CUSTOM_OPTION"
+                          v-model="pptForm.keyCustom"
+                          rows="2"
+                          placeholder="请输入重点与难点…"
+                        ></textarea>
+                      </label>
+                      <label>
+                        学生学情
+                        <select v-model="pptForm.studentProfile">
+                          <option value="" disabled>请选择学生学情</option>
+                          <option
+                            v-for="p in STUDENT_PROFILE_OPTIONS"
+                            :key="p"
+                            :value="p"
+                          >
+                            {{ p }}
+                          </option>
+                          <option :value="CUSTOM_OPTION">自定义…</option>
+                        </select>
+                        <textarea
+                          v-if="pptForm.studentProfile === CUSTOM_OPTION"
+                          v-model="pptForm.studentProfileCustom"
+                          rows="2"
+                          placeholder="请描述本班学生的知识基础与学习特点…"
+                        ></textarea>
+                      </label>
+                    </div>
+                  </div>
+                </template>
+
+                <template #apply>
+                  <label>
+                    使用场景
+                    <select v-model="pptForm.usageScene">
+                      <option value="" disabled>请选择使用场景</option>
+                      <option v-for="s in USAGE_SCENE.ppt" :key="s" :value="s">
+                        {{ s }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="pptForm.usageScene === CUSTOM_OPTION"
+                      v-model="pptForm.usageSceneCustom"
+                      rows="2"
+                      placeholder="请描述使用场景…"
+                    ></textarea>
+                  </label>
+
+                  <label>
+                    评估标准
+                    <select v-model="pptForm.assessment">
+                      <option value="" disabled>请选择评估标准</option>
+                      <option v-for="a in pptAssessments" :key="a" :value="a">
+                        {{ a }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="pptForm.assessment === CUSTOM_OPTION"
+                      v-model="pptForm.assessmentCustom"
+                      rows="2"
+                      placeholder="请描述评估侧重…"
+                    ></textarea>
+                  </label>
+
+                  <!-- 参考课件上传 -->
+                  <label class="form-section-title">📎 参考课件（可选）</label>
+                  <div
+                    class="file-upload-area"
+                    @click="triggerPptFileUpload"
+                    @drop="handlePptFileDrop"
+                    @dragover.prevent
+                  >
+                    <input
+                      ref="pptFileInput"
+                      type="file"
+                      accept=".ppt,.pptx,.pdf"
+                      style="display: none"
+                      @change="handlePptFileChange"
+                    />
+                    <div
+                      v-if="!pptForm.referenceFile"
+                      class="upload-placeholder"
+                    >
+                      <span class="upload-icon"
+                        ><svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path
+                            d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
+                          /></svg
+                      ></span>
+                      <p>点击或拖拽上传参考课件</p>
+                      <small>支持 PPT、PPTX、PDF 格式</small>
+                    </div>
+                    <div v-else class="uploaded-file">
+                      <span class="file-icon">📄</span>
+                      <span class="file-name">{{
+                        pptForm.referenceFile.name
+                      }}</span>
+                      <button
+                        type="button"
+                        class="remove-file"
+                        @click.stop="removePptFile"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="chip-row">
+                    <button type="button" class="chip-row__chip">
+                      情境导入
+                    </button>
+                    <button type="button" class="chip-row__chip">
+                      板书提示
+                    </button>
+                    <button type="button" class="chip-row__chip">
+                      课堂追问
+                    </button>
+                  </div>
+                </template>
+
+                <template #actions>
+                  <button
+                    v-if="currentFormStep === 3"
+                    class="btn-primary"
+                    :disabled="isGenerating"
+                    @click="handlePptGenerate"
+                  >
+                    {{ isGenerating ? "正在生成课件…" : "开始生成课件" }}
+                  </button>
+                </template>
+              </FormWizard>
             </article>
+
+            <ContentRevisePanel
+              :title="currentReviseTitle"
+              :messages="currentReviseMessages"
+              :ready="reviseReady"
+              :generating="isGenerating"
+              :progress="currentTaskProgress"
+              :stage="currentTaskStage"
+              :task-id="currentTaskId"
+              :filename="generatedFilename"
+              :placeholder="currentRevisePlaceholder"
+              :pipeline="currentPipeline"
+              @send="handleReviseSend"
+            >
+              <template #footer-tools>
+                <TemplateMarket
+                  :spark-templates="sparkTemplates"
+                  :spark-loading="sparkTemplateLoading"
+                  :spark-error="sparkTemplateError"
+                  :selected-spark-id="pptForm.sparkTemplateId"
+                  :card-note="pptForm.isCardNote"
+                  :figure="pptForm.isFigure"
+                  :resolve-preview="previewUrl"
+                  @spark-change="(v) => (pptForm.sparkTemplateId = v)"
+                  @refresh-spark="fetchSparkTemplates"
+                  @card-note-change="(v) => (pptForm.isCardNote = v)"
+                  @figure-change="(v) => (pptForm.isFigure = v)"
+                />
+              </template>
+            </ContentRevisePanel>
           </div>
         </section>
 
@@ -4444,159 +4307,76 @@ onUnmounted(() => {
           class="panel"
           data-panel="doc"
         >
-          <!-- 生成进度条 -->
-          <div v-if="showProgress" class="progress-bar-wrap">
-            <div class="progress-bar__header">
-              <span class="progress-bar__stage">{{ currentTaskStage }}</span>
-              <span class="progress-bar__pct">{{ currentTaskProgress }}%</span>
-            </div>
-            <div class="progress-bar__track">
-              <div
-                class="progress-bar__fill"
-                :style="{ width: currentTaskProgress + '%' }"
-              />
-            </div>
-            <div v-if="generatedFilename" class="progress-bar__done">
-              ✅ 文件已生成：
-              <a
-                href="javascript:;"
-                @click="downloadFile(currentTaskId, generatedFilename)"
-                >{{ generatedFilename }}</a
-              >
-            </div>
-          </div>
-
           <div class="generator-layout">
             <article class="form-card">
               <div class="section-head">
                 <div>
                   <span class="section-tag">Prompt Workspace</span>
-                  <h2>智能教案编写</h2>
+                  <h2>教案编写</h2>
                   <p class="section-annotation">
-                    AI 辅助编写完整教案，支持多种教学风格
+                    编写完整教案，支持多种教学风格
                   </p>
                 </div>
               </div>
 
-              <label>
-                学科
-                <select v-model="docForm.subject">
-                  <option value="" disabled>请选择学科</option>
-                  <option v-for="s in commonSubjects" :key="s" :value="s">
-                    {{ s }}
-                  </option>
-                  <option :value="CUSTOM_OPTION">自定义学科…</option>
-                </select>
-                <textarea
-                  v-if="docForm.subject === CUSTOM_OPTION"
-                  v-model="docForm.subjectCustom"
-                  rows="1"
-                  placeholder="请输入学科名称"
-                ></textarea>
-              </label>
+              <FormWizard :steps="DOC_STEPS" v-model="currentFormStep">
+                <template #base>
+                  <div class="form-row">
+                    <label>
+                      学科
+                      <select v-model="docForm.subject">
+                        <option value="" disabled>请选择学科</option>
+                        <option v-for="s in commonSubjects" :key="s" :value="s">
+                          {{ s }}
+                        </option>
+                        <option :value="CUSTOM_OPTION">自定义学科…</option>
+                      </select>
+                      <textarea
+                        v-if="docForm.subject === CUSTOM_OPTION"
+                        v-model="docForm.subjectCustom"
+                        rows="1"
+                        placeholder="请输入学科名称"
+                      ></textarea>
+                    </label>
 
-              <label>
-                课题
-                <input
-                  v-model="docForm.topic"
-                  type="text"
-                  placeholder="例如：力的分解"
-                />
-              </label>
+                    <label>
+                      课题
+                      <input
+                        v-model="docForm.topic"
+                        type="text"
+                        placeholder="例如：力的分解"
+                      />
+                    </label>
+                  </div>
 
-              <label>
-                教案格式
-                <select v-model="docForm.format">
-                  <option>标准教案</option>
-                  <option>详细教案</option>
-                  <option>简版教案</option>
-                  <option>校本模板</option>
-                </select>
-              </label>
+                  <div class="form-row">
+                    <label>
+                      学段
+                      <select v-model="docForm.grade">
+                        <option value="" disabled>请选择学段</option>
+                        <option v-for="g in GRADE_OPTIONS" :key="g" :value="g">
+                          {{ g }}
+                        </option>
+                      </select>
+                    </label>
+                    <label>
+                      课时长度
+                      <select v-model="docForm.duration">
+                        <option
+                          v-for="d in DURATION_OPTIONS"
+                          :key="d"
+                          :value="d"
+                        >
+                          {{ d }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                </template>
 
-              <label>
-                讲授风格
-                <select v-model="docForm.style">
-                  <option>实验探究型</option>
-                  <option>讲授演示型</option>
-                  <option>问题驱动型</option>
-                  <option>翻转课堂型</option>
-                </select>
-              </label>
-
-              <!-- 教学目标 -->
-              <label class="form-section-title"
-                ><svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <circle cx="12" cy="12" r="6" />
-                  <circle cx="12" cy="12" r="2" fill="currentColor" />
-                </svg>
-                教学目标与重难点</label
-              >
-              <label>
-                教学目标
-                <select v-model="docForm.teachingGoals">
-                  <option value="" disabled>
-                    {{ docGoals.length ? "请选择教学目标" : "请先选择学科" }}
-                  </option>
-                  <option v-for="g in docGoals" :key="g" :value="g">
-                    {{ g }}
-                  </option>
-                  <option :value="CUSTOM_OPTION">自定义目标…</option>
-                </select>
-                <textarea
-                  v-if="docForm.teachingGoals === CUSTOM_OPTION"
-                  v-model="docForm.goalCustom"
-                  rows="2"
-                  placeholder="请输入本节课的教学目标…"
-                ></textarea>
-              </label>
-
-              <label>
-                重点与难点
-                <select v-model="docForm.keyPoints">
-                  <option value="" disabled>
-                    {{ docKeys.length ? "请选择重点与难点" : "请先选择学科" }}
-                  </option>
-                  <option v-for="k in docKeys" :key="k" :value="k">
-                    {{ k }}
-                  </option>
-                  <option :value="CUSTOM_OPTION">自定义重难点…</option>
-                </select>
-                <textarea
-                  v-if="docForm.keyPoints === CUSTOM_OPTION"
-                  v-model="docForm.keyCustom"
-                  rows="2"
-                  placeholder="请输入重点与难点…"
-                ></textarea>
-              </label>
-
-              <!-- 参考教案上传 -->
-              <label class="form-section-title">📎 参考教案（可选）</label>
-              <div
-                class="file-upload-area"
-                @click="triggerDocFileUpload"
-                @drop="handleDocFileDrop"
-                @dragover.prevent
-              >
-                <input
-                  ref="docFileInput"
-                  type="file"
-                  accept=".doc,.docx,.pdf"
-                  style="display: none"
-                  @change="handleDocFileChange"
-                />
-                <div v-if="!docForm.referenceFile" class="upload-placeholder">
-                  <span class="upload-icon"
+                <template #goals>
+                  <!-- 教学目标 -->
+                  <label class="form-section-title"
                     ><svg
                       width="16"
                       height="16"
@@ -4607,85 +4387,249 @@ onUnmounted(() => {
                       stroke-linecap="round"
                       stroke-linejoin="round"
                     >
-                      <path
-                        d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
-                      /></svg
-                  ></span>
-                  <p>点击或拖拽上传参考教案</p>
-                  <small>支持 DOC、DOCX、PDF 格式</small>
-                </div>
-                <div v-else class="uploaded-file">
-                  <span class="file-icon">📄</span>
-                  <span class="file-name">{{
-                    docForm.referenceFile.name
-                  }}</span>
-                  <button
-                    type="button"
-                    class="remove-file"
-                    @click.stop="removeDocFile"
+                      <circle cx="12" cy="12" r="10" />
+                      <circle cx="12" cy="12" r="6" />
+                      <circle cx="12" cy="12" r="2" fill="currentColor" />
+                    </svg>
+                    教学目标与重难点</label
                   >
-                    ✕
-                  </button>
-                </div>
-              </div>
+                  <label>
+                    教学目标
+                    <select v-model="docForm.teachingGoals">
+                      <option value="" disabled>请选择教学目标</option>
+                      <option v-for="g in docGoals" :key="g" :value="g">
+                        {{ g }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义目标…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.teachingGoals === CUSTOM_OPTION"
+                      v-model="docForm.goalCustom"
+                      rows="2"
+                      placeholder="请输入本节课的教学目标…"
+                    ></textarea>
+                  </label>
 
-              <div class="chip-row">
-                <button type="button" class="chip-row__chip">学情分析</button>
-                <button type="button" class="chip-row__chip">板书设计</button>
-                <button type="button" class="chip-row__chip">作业布置</button>
-              </div>
+                  <label>
+                    重点与难点
+                    <select v-model="docForm.keyPoints">
+                      <option value="" disabled>请选择重点与难点</option>
+                      <option v-for="k in docKeys" :key="k" :value="k">
+                        {{ k }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义重难点…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.keyPoints === CUSTOM_OPTION"
+                      v-model="docForm.keyCustom"
+                      rows="2"
+                      placeholder="请输入重点与难点…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    学生学情
+                    <select v-model="docForm.studentProfile">
+                      <option value="" disabled>请选择学生学情</option>
+                      <option
+                        v-for="p in STUDENT_PROFILE_OPTIONS"
+                        :key="p"
+                        :value="p"
+                      >
+                        {{ p }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.studentProfile === CUSTOM_OPTION"
+                      v-model="docForm.studentProfileCustom"
+                      rows="2"
+                      placeholder="请描述本班学生的知识基础与学习特点…"
+                    ></textarea>
+                  </label>
+                </template>
 
-              <button
-                class="btn-primary"
-                :disabled="isGenerating"
-                @click="handleDocGenerate"
-              >
-                {{ isGenerating ? "AI 正在生成教案..." : "开始生成教案" }}
-              </button>
-            </article>
+                <template #process>
+                  <label>
+                    教案格式
+                    <select v-model="docForm.format">
+                      <option value="标准教案">
+                        标准教案（常规备课，环节完整）
+                      </option>
+                      <option value="详细教案">
+                        详细教案（公开课/评比，含设计意图）
+                      </option>
+                      <option value="简版教案">
+                        简版教案（日常速备，重点突出）
+                      </option>
+                      <option value="校本模板">
+                        校本模板（沿用学校统一格式）
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    讲授风格
+                    <select v-model="docForm.style">
+                      <option value="实验探究型">
+                        实验探究型（实验/观察 → 归纳结论）
+                      </option>
+                      <option value="讲授演示型">
+                        讲授演示型（讲解为主，配合演示）
+                      </option>
+                      <option value="问题驱动型">
+                        问题驱动型（用问题串层层推进）
+                      </option>
+                      <option value="翻转课堂型">
+                        翻转课堂型（课前自学，课上研讨）
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    环节侧重
+                    <select v-model="docForm.lessonFocus">
+                      <option value="" disabled>请选择环节侧重</option>
+                      <option
+                        v-for="f in LESSON_FOCUS_OPTIONS"
+                        :key="f"
+                        :value="f"
+                      >
+                        {{ f }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.lessonFocus === CUSTOM_OPTION"
+                      v-model="docForm.lessonFocusCustom"
+                      rows="2"
+                      placeholder="请描述教学环节侧重…"
+                    ></textarea>
+                  </label>
+                </template>
 
-            <article class="preview-card preview-card--rich">
-              <div class="preview-card__chrome">
-                <span />
-                <span />
-                <span />
-                <em>实时结构预览</em>
-              </div>
+                <template #apply>
+                  <label>
+                    使用场景
+                    <select v-model="docForm.usageScene">
+                      <option value="" disabled>请选择使用场景</option>
+                      <option v-for="s in USAGE_SCENE.doc" :key="s" :value="s">
+                        {{ s }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.usageScene === CUSTOM_OPTION"
+                      v-model="docForm.usageSceneCustom"
+                      rows="2"
+                      placeholder="请描述使用场景…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    评估标准
+                    <select v-model="docForm.assessment">
+                      <option value="" disabled>请选择评估标准</option>
+                      <option v-for="a in docAssessments" :key="a" :value="a">
+                        {{ a }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="docForm.assessment === CUSTOM_OPTION"
+                      v-model="docForm.assessmentCustom"
+                      rows="2"
+                      placeholder="请描述评估侧重…"
+                    ></textarea>
+                  </label>
 
-              <div class="preview-card__body">
-                <div class="preview-card__head">
-                  <div>
-                    <span class="preview-card__eyebrow">推荐章节</span>
-                    <h3>{{ docForm.topic || "等待填写课题" }}</h3>
-                    <p>
-                      {{ docForm.format }} ·
-                      {{ resolveSubjectName(docForm) || "待填写学科" }}
-                    </p>
-                  </div>
+                  <!-- 参考教案上传 -->
+                  <label class="form-section-title">📎 参考教案（可选）</label>
                   <div
-                    class="ai-badge"
-                    :class="{ 'ai-badge--active': isGenerating }"
+                    class="file-upload-area"
+                    @click="triggerDocFileUpload"
+                    @drop="handleDocFileDrop"
+                    @dragover.prevent
                   >
-                    <i />
-                    {{ isGenerating ? "Generating" : "Synced" }}
-                  </div>
-                </div>
-
-                <div class="recommendation-list">
-                  <article
-                    v-for="item in docRecommendation"
-                    :key="item.index"
-                    class="recommendation-item"
-                  >
-                    <span>{{ item.index }}</span>
-                    <div>
-                      <strong>{{ item.title }}</strong>
-                      <p>{{ item.note }}</p>
+                    <input
+                      ref="docFileInput"
+                      type="file"
+                      accept=".doc,.docx,.pdf"
+                      style="display: none"
+                      @change="handleDocFileChange"
+                    />
+                    <div
+                      v-if="!docForm.referenceFile"
+                      class="upload-placeholder"
+                    >
+                      <span class="upload-icon"
+                        ><svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path
+                            d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
+                          /></svg
+                      ></span>
+                      <p>点击或拖拽上传参考教案</p>
+                      <small>支持 DOC、DOCX、PDF 格式</small>
                     </div>
-                  </article>
-                </div>
-              </div>
+                    <div v-else class="uploaded-file">
+                      <span class="file-icon">📄</span>
+                      <span class="file-name">{{
+                        docForm.referenceFile.name
+                      }}</span>
+                      <button
+                        type="button"
+                        class="remove-file"
+                        @click.stop="removeDocFile"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="chip-row">
+                    <button type="button" class="chip-row__chip">
+                      学情分析
+                    </button>
+                    <button type="button" class="chip-row__chip">
+                      板书设计
+                    </button>
+                    <button type="button" class="chip-row__chip">
+                      作业布置
+                    </button>
+                  </div>
+                </template>
+
+                <template #actions>
+                  <button
+                    v-if="currentFormStep === 3"
+                    class="btn-primary"
+                    :disabled="isGenerating"
+                    @click="handleDocGenerate"
+                  >
+                    {{ isGenerating ? "正在生成教案…" : "开始生成教案" }}
+                  </button>
+                </template>
+              </FormWizard>
             </article>
+
+            <ContentRevisePanel
+              :title="currentReviseTitle"
+              :messages="currentReviseMessages"
+              :ready="reviseReady"
+              :generating="isGenerating"
+              :progress="currentTaskProgress"
+              :stage="currentTaskStage"
+              :task-id="currentTaskId"
+              :filename="generatedFilename"
+              :placeholder="currentRevisePlaceholder"
+              :pipeline="currentPipeline"
+              @send="handleReviseSend"
+            />
           </div>
         </section>
 
@@ -4699,184 +4643,203 @@ onUnmounted(() => {
               <div class="section-head">
                 <div>
                   <span class="section-tag">Teaching Question Flow</span>
-                  <h2>智能教学题</h2>
+                  <h2>课堂练习</h2>
                   <p class="section-annotation">
                     选择场景和难度，一键生成教学练习题
                   </p>
                 </div>
               </div>
 
-              <label>
-                知识点
-                <input
-                  v-model="questionForm.topic"
-                  type="text"
-                  placeholder="例如：牛顿第二定律应用"
-                />
-              </label>
-
-              <div
-                class="form-row"
-                style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px"
-              >
-                <label>
-                  学科
-                  <select v-model="questionForm.subject">
-                    <option value="" disabled>选择学科</option>
-                    <option v-for="s in commonSubjects" :key="s" :value="s">
-                      {{ s }}
-                    </option>
-                  </select>
-                </label>
-                <label>
-                  学段
-                  <select v-model="questionForm.stage">
-                    <option>小学</option>
-                    <option>初中</option>
-                    <option>高中</option>
-                  </select>
-                </label>
-              </div>
-
-              <div class="form-card__group">
-                <label class="form-card__group-label">配置</label>
-                <div class="form-card__group-row">
-                  <span class="form-card__group-key">使用场景</span>
-                  <div class="form-card__select-wrap">
-                    <select v-model="questionForm.scenario">
-                      <option>随堂检测</option>
-                      <option>课后练习</option>
-                      <option>单元复习</option>
-                      <option>分层作业</option>
-                    </select>
-                    <svg
-                      class="form-card__select-chevron"
-                      viewBox="0 0 12 12"
-                      width="12"
-                      height="12"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M3 5l3 3 3-3"
-                        stroke="currentColor"
-                        stroke-width="1.4"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
+              <FormWizard :steps="QUIZ_STEPS" v-model="currentFormStep">
+                <template #base>
+                  <div class="form-row">
+                    <label>
+                      学科
+                      <select v-model="questionForm.subject">
+                        <option value="" disabled>请选择学科</option>
+                        <option v-for="s in commonSubjects" :key="s" :value="s">
+                          {{ s }}
+                        </option>
+                        <option :value="CUSTOM_OPTION">自定义学科…</option>
+                      </select>
+                      <textarea
+                        v-if="questionForm.subject === CUSTOM_OPTION"
+                        v-model="questionForm.subjectCustom"
+                        rows="1"
+                        placeholder="请输入学科名称"
+                      ></textarea>
+                    </label>
+                    <label>
+                      知识点
+                      <input
+                        v-model="questionForm.topic"
+                        type="text"
+                        placeholder="例如：牛顿第二定律应用"
                       />
-                    </svg>
+                    </label>
                   </div>
-                </div>
-                <div class="form-card__group-row">
-                  <span class="form-card__group-key">难度风格</span>
-                  <div class="form-card__select-wrap">
+                  <label>
+                    学段
+                    <select v-model="questionForm.stage">
+                      <option value="" disabled>请选择学段</option>
+                      <option v-for="g in GRADE_OPTIONS" :key="g" :value="g">
+                        {{ g }}
+                      </option>
+                    </select>
+                  </label>
+                </template>
+
+                <template #goals>
+                  <label>
+                    考查目标
+                    <select v-model="questionForm.target">
+                      <option value="" disabled>请选择考查目标</option>
+                      <option value="知识记忆">知识记忆</option>
+                      <option value="理解应用">理解应用</option>
+                      <option value="综合运用">综合运用</option>
+                      <option value="迁移创新">迁移创新</option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="questionForm.target === CUSTOM_OPTION"
+                      v-model="questionForm.targetCustom"
+                      rows="2"
+                      placeholder="请描述考查目标…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    学生学情
+                    <select v-model="questionForm.studentProfile">
+                      <option value="" disabled>请选择学生学情</option>
+                      <option
+                        v-for="p in STUDENT_PROFILE_OPTIONS"
+                        :key="p"
+                        :value="p"
+                      >
+                        {{ p }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="questionForm.studentProfile === CUSTOM_OPTION"
+                      v-model="questionForm.studentProfileCustom"
+                      rows="2"
+                      placeholder="请描述本班学生的知识基础与学习特点…"
+                    ></textarea>
+                  </label>
+                </template>
+
+                <template #design>
+                  <label>
+                    难度风格
                     <select v-model="questionForm.difficulty">
-                      <option>基础巩固</option>
-                      <option>综合提升</option>
-                      <option>拓展挑战</option>
+                      <option value="基础巩固">
+                        基础巩固（课后即时练，夯实概念）
+                      </option>
+                      <option value="综合提升">
+                        综合提升（章节综合，练方法）
+                      </option>
+                      <option value="拓展挑战">
+                        拓展挑战（思维拓展，冲刺拔高）
+                      </option>
                     </select>
-                    <svg
-                      class="form-card__select-chevron"
-                      viewBox="0 0 12 12"
-                      width="12"
-                      height="12"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M3 5l3 3 3-3"
-                        stroke="currentColor"
-                        stroke-width="1.4"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </div>
-                </div>
-                <div class="form-card__group-row">
-                  <span class="form-card__group-key">题量</span>
-                  <div class="form-card__select-wrap">
+                  </label>
+                  <label>
+                    题量
                     <select v-model.number="questionForm.count">
                       <option :value="5">5 题（快速练习）</option>
                       <option :value="8">8 题（标准练习）</option>
                       <option :value="10">10 题（完整检测）</option>
                       <option :value="15">15 题（充分训练）</option>
                     </select>
-                    <svg
-                      class="form-card__select-chevron"
-                      viewBox="0 0 12 12"
-                      width="12"
-                      height="12"
-                      fill="none"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M3 5l3 3 3-3"
-                        stroke="currentColor"
-                        stroke-width="1.4"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                  </div>
-                </div>
-              </div>
+                  </label>
+                  <label>
+                    题型构成
+                    <select v-model="questionForm.questionTypes">
+                      <option value="" disabled>请选择题型构成</option>
+                      <option
+                        v-for="q in QUESTION_TYPE_OPTIONS"
+                        :key="q"
+                        :value="q"
+                      >
+                        {{ q }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="questionForm.questionTypes === CUSTOM_OPTION"
+                      v-model="questionForm.questionTypesCustom"
+                      rows="2"
+                      placeholder="请描述题型构成…"
+                    ></textarea>
+                  </label>
+                </template>
 
-              <button
-                class="btn-primary"
-                :disabled="isGenerating"
-                @click="handleQuestionGenerate"
-                style="margin-top: 16px"
-              >
-                {{ isGenerating ? "AI 正在生成题组..." : "一键生成" }}
-              </button>
+                <template #apply>
+                  <label>
+                    使用场景
+                    <select v-model="questionForm.scenario">
+                      <option value="" disabled>请选择使用场景</option>
+                      <option
+                        v-for="s in USAGE_SCENE.interactive"
+                        :key="s"
+                        :value="s"
+                      >
+                        {{ s }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="questionForm.scenario === CUSTOM_OPTION"
+                      v-model="questionForm.scenarioCustom"
+                      rows="2"
+                      placeholder="请描述使用场景…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    评估标准
+                    <select v-model="questionForm.assessment">
+                      <option value="" disabled>请选择评估标准</option>
+                      <option v-for="a in quizAssessments" :key="a" :value="a">
+                        {{ a }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="questionForm.assessment === CUSTOM_OPTION"
+                      v-model="questionForm.assessmentCustom"
+                      rows="2"
+                      placeholder="请描述评估侧重…"
+                    ></textarea>
+                  </label>
+                </template>
+
+                <template #actions>
+                  <button
+                    v-if="currentFormStep === 3"
+                    class="btn-primary"
+                    :disabled="isGenerating"
+                    @click="handleQuestionGenerate"
+                  >
+                    {{ isGenerating ? "正在生成题组…" : "一键生成" }}
+                  </button>
+                </template>
+              </FormWizard>
             </article>
 
-            <article class="preview-card preview-card--rich">
-              <div class="preview-card__chrome">
-                <span />
-                <span />
-                <span />
-                <em>题组结构预览</em>
-              </div>
-
-              <div class="preview-card__body">
-                <div class="preview-card__head">
-                  <div>
-                    <span class="preview-card__eyebrow"
-                      >{{ questionForm.scenario }} ·
-                      {{ questionForm.difficulty }}</span
-                    >
-                    <h3>{{ questionForm.topic || "等待填写知识点" }}</h3>
-                    <p>
-                      {{ questionForm.subject || "待选学科" }} ·
-                      {{ questionForm.stage }} · 共 {{ questionForm.count }} 题
-                    </p>
-                  </div>
-                  <div
-                    class="ai-badge"
-                    :class="{ 'ai-badge--active': isGenerating }"
-                  >
-                    <i />
-                    {{ isGenerating ? "Generating" : "Live Sync" }}
-                  </div>
-                </div>
-
-                <div class="recommendation-list">
-                  <article
-                    v-for="item in questionRecommendation"
-                    :key="item.index"
-                    class="recommendation-item"
-                  >
-                    <span>{{ item.index }}</span>
-                    <div>
-                      <strong>{{ item.title }}</strong>
-                      <p>{{ item.note }}</p>
-                    </div>
-                  </article>
-                </div>
-              </div>
-            </article>
+            <ContentRevisePanel
+              :title="currentReviseTitle"
+              :messages="currentReviseMessages"
+              :ready="reviseReady"
+              :generating="isGenerating"
+              :progress="currentTaskProgress"
+              :stage="currentTaskStage"
+              :task-id="currentTaskId"
+              :filename="generatedFilename"
+              :placeholder="currentRevisePlaceholder"
+              :pipeline="currentPipeline"
+              @send="handleReviseSend"
+            />
           </div>
         </section>
 
@@ -4898,231 +4861,268 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <label>
-                学科
-                <input
-                  v-model="examForm.subject"
-                  type="text"
-                  placeholder="例如：物理"
-                />
-              </label>
+              <FormWizard :steps="EXAM_STEPS" v-model="currentFormStep">
+                <template #base>
+                  <div class="form-row">
+                    <label>
+                      学科
+                      <select v-model="examForm.subject">
+                        <option value="" disabled>请选择学科</option>
+                        <option v-for="s in commonSubjects" :key="s" :value="s">
+                          {{ s }}
+                        </option>
+                        <option :value="CUSTOM_OPTION">自定义学科…</option>
+                      </select>
+                      <textarea
+                        v-if="examForm.subject === CUSTOM_OPTION"
+                        v-model="examForm.subjectCustom"
+                        rows="1"
+                        placeholder="请输入学科名称"
+                      ></textarea>
+                    </label>
+                    <label>
+                      知识点 / 考试范围
+                      <input
+                        v-model="examForm.topic"
+                        type="text"
+                        placeholder="例如：牛顿运动定律综合"
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    学段
+                    <select v-model="examForm.grade">
+                      <option value="" disabled>请选择学段</option>
+                      <option v-for="g in GRADE_OPTIONS" :key="g" :value="g">
+                        {{ g }}
+                      </option>
+                    </select>
+                  </label>
+                </template>
 
-              <label>
-                知识点 / 考试范围
-                <input
-                  v-model="examForm.topic"
-                  type="text"
-                  placeholder="例如：牛顿运动定律综合"
-                />
-              </label>
+                <template #goals>
+                  <label>
+                    考查目标
+                    <select v-model="examForm.target">
+                      <option value="" disabled>请选择考查目标</option>
+                      <option value="知识记忆">知识记忆</option>
+                      <option value="理解应用">理解应用</option>
+                      <option value="综合运用">综合运用</option>
+                      <option value="迁移创新">迁移创新</option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="examForm.target === CUSTOM_OPTION"
+                      v-model="examForm.targetCustom"
+                      rows="2"
+                      placeholder="请描述考查目标…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    学生学情
+                    <select v-model="examForm.studentProfile">
+                      <option value="" disabled>请选择学生学情</option>
+                      <option
+                        v-for="p in STUDENT_PROFILE_OPTIONS"
+                        :key="p"
+                        :value="p"
+                      >
+                        {{ p }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="examForm.studentProfile === CUSTOM_OPTION"
+                      v-model="examForm.studentProfileCustom"
+                      rows="2"
+                      placeholder="请描述本班学生的知识基础与学习特点…"
+                    ></textarea>
+                  </label>
+                </template>
 
-              <div
-                class="form-row"
-                style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px"
-              >
-                <label>
-                  学段
-                  <select v-model="examForm.grade">
-                    <option>小学</option>
-                    <option>初中</option>
-                    <option>高中</option>
-                  </select>
-                </label>
+                <template #paper>
+                  <div class="form-row">
+                    <label>
+                      难度
+                      <select v-model="examForm.difficulty">
+                        <option value="基础">基础（面向全体，过关为主）</option>
+                        <option value="中等">
+                          中等（贴近月考，区分度适中）
+                        </option>
+                        <option value="提高">提高（选拔拔高，区分度大）</option>
+                      </select>
+                    </label>
+                    <label>
+                      总分
+                      <input
+                        v-model.number="examForm.totalScore"
+                        type="number"
+                        min="50"
+                        max="150"
+                      />
+                    </label>
+                  </div>
 
-                <label>
-                  难度
-                  <select v-model="examForm.difficulty">
-                    <option>基础</option>
-                    <option>中等</option>
-                    <option>提高</option>
-                  </select>
-                </label>
-              </div>
-
-              <div
-                class="form-row"
-                style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px"
-              >
-                <label>
-                  总分
-                  <input
-                    v-model.number="examForm.totalScore"
-                    type="number"
-                    min="50"
-                    max="150"
-                  />
-                </label>
-
-                <label
-                  class="checkbox-label"
-                  style="
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    margin-top: 24px;
-                  "
-                >
-                  <input v-model="examForm.generateAB" type="checkbox" />
-                  <span style="font-weight: 500; color: #475569"
-                    >生成 A/B 卷（防作弊）</span
+                  <label
+                    class="checkbox-label"
+                    style="
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                      margin-top: 8px;
+                    "
                   >
-                </label>
-              </div>
-
-              <div
-                style="
-                  margin-top: 8px;
-                  padding: 12px 14px;
-                  background: #f8fafc;
-                  border-radius: 8px;
-                  border: 1px solid rgba(0, 0, 0, 0.04);
-                "
-              >
-                <p
-                  style="
-                    margin: 0 0 8px 0;
-                    font-size: 0.78rem;
-                    font-weight: 600;
-                    color: #475569;
-                  "
-                >
-                  题量分配
-                </p>
-                <div
-                  style="
-                    display: grid;
-                    grid-template-columns: 1fr 1fr 1fr;
-                    gap: 10px;
-                  "
-                >
-                  <label style="font-size: 0.8rem; color: #6b7280">
-                    选择题
-                    <input
-                      v-model.number="examForm.choiceCount"
-                      type="number"
-                      min="4"
-                      max="20"
-                      style="
-                        display: block;
-                        width: 100%;
-                        margin-top: 4px;
-                        padding: 6px 8px;
-                        border: 1px solid rgba(0, 0, 0, 0.08);
-                        border-radius: 6px;
-                        font-size: 0.85rem;
-                      "
-                    />
-                  </label>
-                  <label style="font-size: 0.8rem; color: #6b7280">
-                    填空题
-                    <input
-                      v-model.number="examForm.fillCount"
-                      type="number"
-                      min="2"
-                      max="12"
-                      style="
-                        display: block;
-                        width: 100%;
-                        margin-top: 4px;
-                        padding: 6px 8px;
-                        border: 1px solid rgba(0, 0, 0, 0.08);
-                        border-radius: 6px;
-                        font-size: 0.85rem;
-                      "
-                    />
-                  </label>
-                  <label style="font-size: 0.8rem; color: #6b7280">
-                    解答题
-                    <input
-                      v-model.number="examForm.essayCount"
-                      type="number"
-                      min="1"
-                      max="8"
-                      style="
-                        display: block;
-                        width: 100%;
-                        margin-top: 4px;
-                        padding: 6px 8px;
-                        border: 1px solid rgba(0, 0, 0, 0.08);
-                        border-radius: 6px;
-                        font-size: 0.85rem;
-                      "
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <button
-                class="btn-primary"
-                :disabled="isGenerating"
-                @click="handleExamGenerate"
-              >
-                {{ isGenerating ? "AI 正在生成试卷..." : "开始生成试卷" }}
-              </button>
-            </article>
-
-            <article class="preview-card preview-card--rich">
-              <div class="preview-card__chrome">
-                <span />
-                <span />
-                <span />
-                <em>试卷结构预览</em>
-              </div>
-
-              <div class="preview-card__body">
-                <div class="preview-card__head">
-                  <div>
-                    <span class="preview-card__eyebrow"
-                      >{{ examForm.grade || "学段" }} ·
-                      {{ examForm.difficulty || "难度" }}</span
+                    <input v-model="examForm.generateAB" type="checkbox" />
+                    <span style="font-weight: 500; color: #475569"
+                      >生成 A/B 卷（防作弊）</span
                     >
-                    <h3>{{ examForm.topic || "等待填写考试范围" }}</h3>
-                    <p>
-                      总分 {{ examForm.totalScore || 100 }} 分 ·
-                      {{ examForm.subject || "待填写学科" }}
-                      {{ examForm.generateAB ? " · 含 A/B 卷" : "" }}
-                    </p>
-                  </div>
-                  <div
-                    class="ai-badge"
-                    :class="{ 'ai-badge--active': isGenerating }"
-                  >
-                    <i />
-                    {{ isGenerating ? "Generating" : "Ready" }}
-                  </div>
-                </div>
+                  </label>
 
-                <div class="recommendation-list">
-                  <article
-                    v-for="item in examRecommendation"
-                    :key="item.index"
-                    class="recommendation-item"
+                  <div
+                    style="
+                      margin-top: 8px;
+                      padding: 12px 14px;
+                      background: #f8fafc;
+                      border-radius: 8px;
+                      border: 1px solid rgba(0, 0, 0, 0.04);
+                    "
                   >
-                    <span>{{ item.index }}</span>
-                    <div>
-                      <strong
-                        >{{ item.type }} × {{ item.count }}（{{
-                          item.score
-                        }}
-                        分/题）</strong
-                      >
-                      <p style="font-size: 0.78rem; color: #6b7280">
-                        {{ item.desc }}
-                      </p>
-                      <p
-                        style="
-                          font-size: 0.75rem;
-                          color: #6b7280;
-                          margin-top: 2px;
-                        "
-                      >
-                        {{ item.caption }}
-                      </p>
+                    <p
+                      style="
+                        margin: 0 0 8px 0;
+                        font-size: 0.78rem;
+                        font-weight: 600;
+                        color: #475569;
+                      "
+                    >
+                      题量分配
+                    </p>
+                    <div
+                      style="
+                        display: grid;
+                        grid-template-columns: 1fr 1fr 1fr;
+                        gap: 10px;
+                      "
+                    >
+                      <label style="font-size: 0.8rem; color: #6b7280">
+                        选择题
+                        <input
+                          v-model.number="examForm.choiceCount"
+                          type="number"
+                          min="4"
+                          max="20"
+                          style="
+                            display: block;
+                            width: 100%;
+                            margin-top: 4px;
+                            padding: 6px 8px;
+                            border: 1px solid rgba(0, 0, 0, 0.08);
+                            border-radius: 6px;
+                            font-size: 0.85rem;
+                          "
+                        />
+                      </label>
+                      <label style="font-size: 0.8rem; color: #6b7280">
+                        填空题
+                        <input
+                          v-model.number="examForm.fillCount"
+                          type="number"
+                          min="2"
+                          max="12"
+                          style="
+                            display: block;
+                            width: 100%;
+                            margin-top: 4px;
+                            padding: 6px 8px;
+                            border: 1px solid rgba(0, 0, 0, 0.08);
+                            border-radius: 6px;
+                            font-size: 0.85rem;
+                          "
+                        />
+                      </label>
+                      <label style="font-size: 0.8rem; color: #6b7280">
+                        解答题
+                        <input
+                          v-model.number="examForm.essayCount"
+                          type="number"
+                          min="1"
+                          max="8"
+                          style="
+                            display: block;
+                            width: 100%;
+                            margin-top: 4px;
+                            padding: 6px 8px;
+                            border: 1px solid rgba(0, 0, 0, 0.08);
+                            border-radius: 6px;
+                            font-size: 0.85rem;
+                          "
+                        />
+                      </label>
                     </div>
-                  </article>
-                </div>
-              </div>
+                  </div>
+                </template>
+
+                <template #apply>
+                  <label>
+                    使用场景
+                    <select v-model="examForm.usageScene">
+                      <option value="" disabled>请选择使用场景</option>
+                      <option v-for="s in USAGE_SCENE.exam" :key="s" :value="s">
+                        {{ s }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="examForm.usageScene === CUSTOM_OPTION"
+                      v-model="examForm.usageSceneCustom"
+                      rows="2"
+                      placeholder="请描述使用场景…"
+                    ></textarea>
+                  </label>
+                  <label>
+                    评估标准
+                    <select v-model="examForm.assessment">
+                      <option value="" disabled>请选择评估标准</option>
+                      <option v-for="a in examAssessments" :key="a" :value="a">
+                        {{ a }}
+                      </option>
+                      <option :value="CUSTOM_OPTION">自定义…</option>
+                    </select>
+                    <textarea
+                      v-if="examForm.assessment === CUSTOM_OPTION"
+                      v-model="examForm.assessmentCustom"
+                      rows="2"
+                      placeholder="请描述评估侧重…"
+                    ></textarea>
+                  </label>
+                </template>
+
+                <template #actions>
+                  <button
+                    v-if="currentFormStep === 3"
+                    class="btn-primary"
+                    :disabled="isGenerating"
+                    @click="handleExamGenerate"
+                  >
+                    {{ isGenerating ? "正在生成试卷…" : "开始生成试卷" }}
+                  </button>
+                </template>
+              </FormWizard>
             </article>
+
+            <ContentRevisePanel
+              :title="currentReviseTitle"
+              :messages="currentReviseMessages"
+              :ready="reviseReady"
+              :generating="isGenerating"
+              :progress="currentTaskProgress"
+              :stage="currentTaskStage"
+              :task-id="currentTaskId"
+              :filename="generatedFilename"
+              :placeholder="currentRevisePlaceholder"
+              :pipeline="currentPipeline"
+              @send="handleReviseSend"
+            />
           </div>
         </section>
 
@@ -5191,559 +5191,6 @@ onUnmounted(() => {
                 </article>
               </div>
             </article>
-          </div>
-        </section>
-
-        <!-- 课堂互动面板 -->
-        <section
-          v-else-if="activePanel === 'classroom'"
-          class="panel classroom-activity-panel"
-        >
-          <div
-            class="panel-header panel-header--activity"
-            style="margin-bottom: 20px"
-          >
-            <h1
-              style="
-                margin: 0 0 6px 0;
-                font-size: 1.5rem;
-                background: linear-gradient(
-                  135deg,
-                  var(--accent-classroom),
-                  #f59e0b
-                );
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-              "
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="3" y="7" width="18" height="10" rx="3" />
-                <circle cx="8" cy="12" r="1.5" fill="currentColor" />
-                <circle cx="16" cy="12" r="1.5" fill="currentColor" />
-                <path d="M10 12h0" />
-                <path d="M12 10v4" />
-              </svg>
-              课堂互动
-            </h1>
-            <p style="margin: 0; font-size: 0.85rem; color: #64748b">
-              随堂抢答 · 实时投票 · 随机抽选 · 小组积分
-            </p>
-          </div>
-
-          <div class="activity-tabs">
-            <button
-              v-for="tab in activityTabs"
-              :key="tab.id"
-              class="activity-tab"
-              :class="{ 'activity-tab--active': activityTab === tab.id }"
-              @click="activityTab = tab.id"
-            >
-              <span class="activity-tab__icon" v-html="tab.icon"></span>
-              <div class="activity-tab__text">
-                <span class="activity-tab__label">{{ tab.label }}</span>
-                <span class="activity-tab__desc">{{ tab.desc }}</span>
-              </div>
-            </button>
-          </div>
-
-          <!-- 随堂抢答 -->
-          <div v-if="activityTab === 'quick-answer'" class="activity-section">
-            <div class="qa-control-bar">
-              <div class="qa-progress">
-                <span class="qa-progress__label"
-                  >题目 {{ qaCurrentQuestion + 1 }} /
-                  {{ quickAnswerQuestions.length }}</span
-                >
-                <div class="qa-progress__bar">
-                  <div
-                    class="qa-progress__fill"
-                    :style="{
-                      width:
-                        ((qaCurrentQuestion + 1) /
-                          quickAnswerQuestions.length) *
-                          100 +
-                        '%',
-                    }"
-                  />
-                </div>
-              </div>
-              <div
-                class="qa-timer"
-                :class="{
-                  'qa-timer--running': qaTimerRunning,
-                  'qa-timer--expired': qaTotalTimeLeft <= 0,
-                }"
-              >
-                <span class="qa-timer__icon">⏳</span>
-                <span class="qa-timer__value">{{ qaTotalTimeLeft }}s</span>
-              </div>
-            </div>
-            <div class="qa-question-card">
-              <div class="qa-question-card__header">
-                <span class="qa-question-card__num"
-                  >Q{{ qaCurrentQuestion + 1 }}</span
-                >
-                <span class="qa-question-card__type"
-                  ><svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polygon points="13 2 4 14 10 14 10 22 20 10 14 10 14 2" />
-                  </svg>
-                  限时抢答</span
-                >
-              </div>
-              <h3 class="qa-question-card__text">
-                {{ quickAnswerQuestions[qaCurrentQuestion].question }}
-              </h3>
-              <div class="qa-question-card__options">
-                <div
-                  v-for="(opt, idx) in quickAnswerQuestions[qaCurrentQuestion]
-                    .options"
-                  :key="idx"
-                  class="qa-option"
-                  :class="{
-                    'qa-option--selected': qaSelectedAnswer === idx,
-                    'qa-option--correct':
-                      quickAnswerQuestions[qaCurrentQuestion].answered &&
-                      idx === quickAnswerQuestions[qaCurrentQuestion].correct,
-                    'qa-option--wrong':
-                      quickAnswerQuestions[qaCurrentQuestion].answered &&
-                      quickAnswerQuestions[qaCurrentQuestion].selected >= 0 &&
-                      idx ===
-                        quickAnswerQuestions[qaCurrentQuestion].selected &&
-                      idx !== quickAnswerQuestions[qaCurrentQuestion].correct,
-                  }"
-                  @click="selectQAAnswer(idx)"
-                >
-                  <span class="qa-option__letter">{{
-                    ["A", "B", "C", "D"][idx]
-                  }}</span>
-                  <span class="qa-option__text">{{ opt }}</span>
-                </div>
-              </div>
-              <div
-                v-if="quickAnswerQuestions[qaCurrentQuestion].answered"
-                class="qa-explanation"
-              >
-                <span class="qa-explanation__icon">ℹ️</span>
-                <p>{{ quickAnswerQuestions[qaCurrentQuestion].explanation }}</p>
-              </div>
-            </div>
-            <div class="qa-actions">
-              <button
-                v-if="!qaStarted"
-                class="qa-action-btn qa-action-btn--primary"
-                @click="startQATimer"
-              >
-                ▶ 开始计时
-              </button>
-              <template v-if="qaStarted &amp;&amp; qaTimerRunning">
-                <button
-                  class="qa-action-btn qa-action-btn--secondary"
-                  @click="prevQAQuestion"
-                  :disabled="qaCurrentQuestion === 0"
-                >
-                  ← 上一题
-                </button>
-                <button
-                  v-if="qaCurrentQuestion < quickAnswerQuestions.length - 1"
-                  class="qa-action-btn qa-action-btn--secondary"
-                  @click="nextQAQuestion"
-                >
-                  下一题 →
-                </button>
-                <button
-                  v-if="qaCurrentQuestion >= quickAnswerQuestions.length - 1"
-                  class="qa-action-btn qa-action-btn--reveal"
-                  @click="submitQA"
-                >
-                  ✅ 提交
-                </button>
-                <button
-                  class="qa-action-btn qa-action-btn--reset"
-                  @click="resetQAQuestion"
-                >
-                  重新开始
-                </button>
-              </template>
-              <template v-if="qaStarted &amp;&amp; !qaTimerRunning">
-                <button
-                  class="qa-action-btn qa-action-btn--secondary"
-                  @click="prevQAQuestion"
-                  :disabled="qaCurrentQuestion === 0"
-                >
-                  ← 上一题
-                </button>
-                <button
-                  class="qa-action-btn qa-action-btn--reset"
-                  @click="resetQAQuestion"
-                >
-                  重新开始
-                </button>
-              </template>
-            </div>
-            <div class="qa-leaderboard">
-              <h3>🏅 抢答排行榜</h3>
-              <div class="qa-leaderboard-list">
-                <div
-                  v-for="(entry, idx) in qaLeaderboard"
-                  :key="entry.name"
-                  class="qa-leaderboard-item"
-                  :class="{ 'qa-leaderboard-item--top': idx < 3 }"
-                >
-                  <span class="qa-leaderboard-item__rank">{{ idx + 1 }}</span>
-                  <span class="qa-leaderboard-item__name">{{
-                    entry.name
-                  }}</span>
-                  <span class="qa-leaderboard-item__score"
-                    >{{ entry.score }}分</span
-                  >
-                  <span class="qa-leaderboard-item__time"
-                    >{{ entry.time }}s</span
-                  >
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 实时投票 -->
-          <div v-if="activityTab === 'poll'" class="activity-section">
-            <div class="poll-selector">
-              <label>选择投票主题：</label>
-              <select v-model="activePollId">
-                <option v-for="p in polls" :key="p.id" :value="p.id">
-                  {{ p.title }}
-                </option>
-              </select>
-            </div>
-            <div
-              v-if="polls.find((p) => p.id === activePollId)"
-              class="poll-card"
-            >
-              <h3 class="poll-card__title">
-                {{ polls.find((p) => p.id === activePollId).title }}
-              </h3>
-              <div class="poll-card__stats">
-                <span class="poll-stat"
-                  >👥 已参与
-                  {{ polls.find((p) => p.id === activePollId).total }} 人</span
-                >
-              </div>
-              <div class="poll-results">
-                <div
-                  v-for="(opt, idx) in polls.find((p) => p.id === activePollId)
-                    .options"
-                  :key="idx"
-                  class="poll-bar-item"
-                >
-                  <div class="poll-bar-item__label">{{ opt.label }}</div>
-                  <div class="poll-bar-item__track">
-                    <div
-                      class="poll-bar-item__fill"
-                      :style="{
-                        width:
-                          (opt.votes /
-                            polls.find((p) => p.id === activePollId).total) *
-                            100 +
-                          '%',
-                        background: opt.color,
-                      }"
-                    />
-                  </div>
-                  <div class="poll-bar-item__meta">
-                    <span class="poll-bar-item__count">{{ opt.votes }}票</span>
-                    <span class="poll-bar-item__percent"
-                      >{{
-                        Math.round(
-                          (opt.votes /
-                            polls.find((p) => p.id === activePollId).total) *
-                            100,
-                        )
-                      }}%</span
-                    >
-                  </div>
-                </div>
-              </div>
-            </div>
-            <button class="poll-action-btn"><span>✏️</span> 创建新投票</button>
-          </div>
-
-          <!-- 随机抽选 -->
-          <div v-if="activityTab === 'random-pick'" class="activity-section">
-            <div class="pick-mode-switch">
-              <button
-                :class="{ 'pick-mode-btn--active': pickMode === 'single' }"
-                class="pick-mode-btn"
-                @click="pickMode = 'single'"
-              >
-                单人抽取
-              </button>
-              <button
-                :class="{ 'pick-mode-btn--active': pickMode === 'group' }"
-                class="pick-mode-btn"
-                @click="pickMode = 'group'"
-              >
-                小组抽取
-              </button>
-            </div>
-            <div class="pick-roulette">
-              <div
-                v-if="pickingStudent || pickHistory.length > 0"
-                class="pick-result"
-                :class="{ 'pick-result--spinning': isPicking }"
-              >
-                <span class="pick-result__avatar">{{
-                  (pickingStudent && pickingStudent.avatar) ||
-                  (pickHistory.length > 0 && pickHistory[0].avatar)
-                }}</span>
-                <span class="pick-result__name">{{
-                  (pickingStudent && pickingStudent.name) ||
-                  (pickHistory.length > 0 && pickHistory[0].name)
-                }}</span>
-              </div>
-              <div
-                v-if="!isPicking && pickHistory.length === 0"
-                class="pick-placeholder"
-              >
-                <span class="pick-placeholder__icon"
-                  ><svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="4" y="4" width="16" height="16" rx="3" />
-                    <circle cx="9" cy="9" r="1.5" fill="currentColor" />
-                    <circle cx="15" cy="15" r="1.5" fill="currentColor" /></svg
-                ></span>
-                <span class="pick-placeholder__text">点击下方按钮开始抽选</span>
-              </div>
-            </div>
-            <button
-              class="pick-button"
-              :class="{ 'pick-button--running': isPicking }"
-              @click="startRandomPick"
-              :disabled="isPicking"
-            >
-              <span v-html="pickIcon"></span>
-              {{ isPicking ? "抽取中..." : "随机抽选" }}
-            </button>
-            <div class="student-roster">
-              <h3>
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <rect x="4" y="3" width="16" height="18" rx="2" />
-                  <line x1="8" y1="9" x2="16" y2="9" />
-                  <line x1="8" y1="13" x2="14" y2="13" />
-                  <line x1="8" y1="17" x2="12" y2="17" />
-                </svg>
-                学生名单（{{ students.length }}人）
-              </h3>
-              <div class="roster-grid">
-                <div
-                  v-for="student in students"
-                  :key="student.id"
-                  class="roster-item"
-                >
-                  <span class="roster-item__avatar">{{ student.avatar }}</span>
-                  <span class="roster-item__name">{{ student.name }}</span>
-                  <button
-                    class="roster-item__remove"
-                    @click="removeStudent(student.id)"
-                    title="移除"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div v-if="pickHistory.length > 0" class="pick-history">
-              <h3>
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path
-                    d="M17 3a2.85 2.85 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"
-                  />
-                </svg>
-                抽选记录
-              </h3>
-              <div class="pick-history-list">
-                <div
-                  v-for="(record, idx) in pickHistory.slice(0, 10)"
-                  :key="idx"
-                  class="pick-history-item"
-                >
-                  <span class="pick-history-item__idx">{{ idx + 1 }}</span>
-                  <span class="pick-history-item__avatar">{{
-                    record.avatar
-                  }}</span>
-                  <span class="pick-history-item__name">{{ record.name }}</span>
-                  <span class="pick-history-item__time">{{ record.time }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 小组积分 -->
-          <div v-if="activityTab === 'group-score'" class="activity-section">
-            <div class="group-scoreboard">
-              <div
-                v-for="group in [...groups].sort((a, b) => b.score - a.score)"
-                :key="group.id"
-                class="group-card"
-              >
-                <div class="group-card__rank" :style="{ color: group.color }">
-                  {{
-                    [...groups]
-                      .sort((a, b) => b.score - a.score)
-                      .indexOf(group) + 1
-                  }}
-                </div>
-                <div class="group-card__info">
-                  <h3 class="group-card__name" :style="{ color: group.color }">
-                    {{ group.name }}
-                  </h3>
-                  <div class="group-card__members">
-                    <span
-                      v-for="(member, idx) in group.members"
-                      :key="idx"
-                      class="group-card__member"
-                      >{{ member }}</span
-                    >
-                  </div>
-                </div>
-                <div class="group-card__score-area">
-                  <div
-                    class="group-card__score"
-                    :style="{ color: group.color }"
-                  >
-                    {{ group.score
-                    }}<span class="group-card__score-unit">分</span>
-                  </div>
-                  <div class="group-card__bar">
-                    <div
-                      class="group-card__bar-fill"
-                      :style="{
-                        width: (group.score / 100) * 100 + '%',
-                        background: group.color,
-                      }"
-                    />
-                  </div>
-                </div>
-                <div class="group-card__actions">
-                  <button
-                    class="group-score-btn group-score-btn--add"
-                    @click="addGroupScore(group.id, 5)"
-                  >
-                    +5
-                  </button>
-                  <button
-                    class="group-score-btn group-score-btn--add"
-                    @click="addGroupScore(group.id, 1)"
-                  >
-                    +1
-                  </button>
-                  <button
-                    class="group-score-btn group-score-btn--sub"
-                    @click="addGroupScore(group.id, -1)"
-                  >
-                    −1
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- 学情反馈面板 -->
-        <section
-          v-else-if="activePanel === 'feedback'"
-          class="panel"
-          data-panel="feedback"
-        >
-          <div class="placeholder-panel">
-            <div class="placeholder-icon">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="4" y="14" width="4" height="6" rx="1" />
-                <rect x="10" y="8" width="4" height="12" rx="1" />
-                <rect x="16" y="3" width="4" height="17" rx="1" />
-              </svg>
-            </div>
-            <h2>学情反馈</h2>
-            <p>学情分析功能正在开发中，将支持：</p>
-            <ul class="feature-list">
-              <li>学生答题正确率分析</li>
-              <li>知识点掌握时长统计</li>
-              <li>易错点智能识别</li>
-              <li>个性化学习建议生成</li>
-            </ul>
-            <div class="placeholder-tip">
-              <span
-                ><svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M10 18h4" />
-                  <path d="M12 2v2" />
-                  <path d="M7 7l1.4 1.4" />
-                  <path d="M17 7l-1.4 1.4" />
-                  <circle cx="12" cy="10" r="5" />
-                  <path d="M10 14c0 .7.5 1 2 1s2-.3 2-1" /></svg
-              ></span>
-              提示：使用课堂练习功能后，系统将自动收集学情数据
-            </div>
           </div>
         </section>
 
@@ -6064,7 +5511,7 @@ onUnmounted(() => {
                         />
                         <polyline points="13 2 13 9 20 9" />
                       </svg>
-                      <p>暂无生成记录<br />快去体验 AI 创作吧</p>
+                      <p>暂无生成记录<br />快去开始创作吧</p>
                     </div>
                   </td>
                 </tr>
@@ -6726,6 +6173,20 @@ onUnmounted(() => {
   text-transform: uppercase;
   color: var(--ink-muted);
   opacity: 0.7;
+}
+
+.nav-group--featured .nav-group__label {
+  opacity: 1;
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+.nav-group--featured {
+  margin-bottom: 18px;
+}
+
+.nav-group--featured .nav-item {
+  margin-bottom: 8px;
 }
 
 .nav-item {
@@ -12311,238 +11772,6 @@ onUnmounted(() => {
   [class*="float"] {
     animation: none !important;
   }
-}
-
-/* ══════════════════════════════════════════════════════════════
-   PPT 模版选择器样式
-   ══════════════════════════════════════════════════════════════ */
-.template-select-section {
-  margin-top: 1rem;
-  padding: 0.85rem 1rem;
-  background: linear-gradient(135deg, #f0f4ff 0%, #faf5ff 100%);
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-}
-
-.template-select__label {
-  display: flex;
-  align-items: center;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #334155;
-  margin-bottom: 0.5rem;
-}
-
-.template-select__hint {
-  font-weight: 400;
-  font-size: 0.72rem;
-  color: #64748b;
-  margin-left: 0.25rem;
-}
-
-.template-select__dropdown {
-  width: 100%;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  font-size: 0.8rem;
-  color: #334155;
-  background: #fff;
-  transition: border-color 0.2s;
-}
-
-.template-select__dropdown:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-/* 生成引擎切换 */
-.engine-switch {
-  margin-top: 1rem;
-  padding: 0.75rem 0.9rem;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-}
-
-.engine-switch__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin-bottom: 0.55rem;
-  flex-wrap: wrap;
-}
-
-.engine-switch__title {
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #334155;
-}
-
-.engine-switch__hint {
-  font-size: 0.72rem;
-  color: #64748b;
-}
-
-.engine-switch__options {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.engine-switch__btn {
-  flex: 1;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #475569;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.engine-switch__btn:hover {
-  border-color: #c7d2fe;
-}
-
-.engine-switch__btn.is-active {
-  color: #fff;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  border-color: transparent;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
-}
-
-/* 讯飞参数：加载 / 错误提示 */
-.engine-note {
-  margin-top: 0.5rem;
-  font-size: 0.73rem;
-  color: #64748b;
-}
-
-.engine-note--warn {
-  color: #b45309;
-}
-
-/* 模板翻页 */
-.template-pager {
-  margin-top: 0.6rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.template-pager__btn {
-  padding: 0.35rem 0.7rem;
-  font-size: 0.73rem;
-  color: #4338ca;
-  background: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.template-pager__btn:disabled {
-  color: #94a3b8;
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  cursor: not-allowed;
-}
-
-.template-pager__info {
-  flex: 1;
-  text-align: center;
-  font-size: 0.72rem;
-  color: #64748b;
-}
-
-/* 讯飞备注 / 配图开关 */
-.engine-options {
-  margin-top: 0.7rem;
-  display: flex;
-  gap: 1.2rem;
-}
-
-.engine-options__item {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.78rem;
-  color: #334155;
-  cursor: pointer;
-}
-
-.engine-options__item input {
-  width: 15px;
-  height: 15px;
-  accent-color: #6366f1;
-  cursor: pointer;
-}
-
-.template-auto-hint {
-  margin-top: 0.5rem;
-  padding: 0.45rem 0.6rem;
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  border-radius: 6px;
-  font-size: 0.73rem;
-  color: #065f46;
-  line-height: 1.4;
-}
-
-.template-auto-hint--fallback {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #64748b;
-}
-
-/* 已选中模版的预览图 */
-.template-preview {
-  margin-top: 0.65rem;
-  display: flex;
-  gap: 0.65rem;
-  align-items: flex-start;
-}
-.template-preview__img {
-  width: 120px;
-  height: 80px;
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  flex-shrink: 0;
-}
-.template-preview__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
-}
-.template-preview__badge {
-  align-self: flex-start;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  background: #eef2ff;
-  color: #4338ca;
-  border: 1px solid #c7d2fe;
-}
-.template-preview__desc {
-  font-size: 0.72rem;
-  color: #64748b;
-  line-height: 1.4;
-}
-.template-preview__capacity {
-  font-size: 0.7rem;
-  color: #b45309;
-  background: #fef3c7;
-  border: 1px solid #fde68a;
-  border-radius: 6px;
-  padding: 0.3rem 0.5rem;
-  line-height: 1.45;
 }
 
 /* 表单字段辅助说明 */

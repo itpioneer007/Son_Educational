@@ -11,6 +11,16 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-ws-H.PHIXRLM.Deyh.MEUCIQ
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-v4.1-flash"
 
+# ── 四大内容制作角色的独立模型配置 ────────────────────────────────
+# 每个内容制作角色由「特定 LLM 模型」驱动，默认复用上方内容生成模型，
+# 后续可单独将某个角色替换为其他 LLM（改环境变量或下方模型名即可）。
+# 角色对应：PPT_MODEL=课件制作 / DOC_MODEL=教案编写 / QUIZ_MODEL=课堂练习 / EXAM_MODEL=试卷生成
+# ==================================================================
+PPT_MODEL = os.getenv("PPT_MODEL") or DEEPSEEK_MODEL
+DOC_MODEL = os.getenv("DOC_MODEL") or DEEPSEEK_MODEL
+QUIZ_MODEL = os.getenv("QUIZ_MODEL") or DEEPSEEK_MODEL
+EXAM_MODEL = os.getenv("EXAM_MODEL") or DEEPSEEK_MODEL
+
 # Qwen 对话配置 —— 阿里云百炼 DashScope（OpenAI 兼容接口）
 # 用于「知课 AI 备课助手」对话；课件/教案/出题/试卷仍走 DeepSeek
 # 注册获取 Key: https://bailian.console.aliyun.com/

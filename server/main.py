@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -96,6 +96,8 @@ def _new_task(task_type: str, subject: str = "", topic: str = "", grade: str = "
         "filename": None,
         "filepath": None,
         "error": None,
+        "params": None,      # 生成参数（供问答区提出修改意见后重跑使用）
+        "revisions": [],     # 用户历次修改意见
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     _save_tasks()
@@ -125,6 +127,17 @@ async def create_courseware(
     fillCount: str = Form("6"),
     essayCount: str = Form("4"),
     generateAB: str = Form("false"),
+    # 教学要素（分步向导采集的关键决策信息）
+    duration: str = Form(""),
+    studentProfile: str = Form(""),
+    interactionDesign: str = Form(""),
+    lessonFocus: str = Form(""),
+    usageScene: str = Form(""),
+    assessment: str = Form(""),
+    target: str = Form(""),
+    questionTypes: str = Form(""),
+    scenario: str = Form(""),
+    count: str = Form(""),
     template: str = Form(""),       # PPT 模版 ID，为空时自动根据学科匹配
     engine: str = Form("spark"),    # PPT 生成引擎：spark(讯飞智文) | local(本地模板)
     sparkTemplateId: str = Form(""),  # 讯飞模板 ID，为空用后端配置默认模板
@@ -152,6 +165,16 @@ async def create_courseware(
         "fillCount": fillCount,
         "essayCount": essayCount,
         "generateAB": generateAB,
+        "duration": duration,
+        "studentProfile": studentProfile,
+        "interactionDesign": interactionDesign,
+        "lessonFocus": lessonFocus,
+        "usageScene": usageScene,
+        "assessment": assessment,
+        "target": target,
+        "questionTypes": questionTypes,
+        "scenario": scenario,
+        "count": count,
         "template": template,
         "engine": engine,
         "sparkTemplateId": sparkTemplateId,
@@ -160,8 +183,50 @@ async def create_courseware(
     }
 
     # 后台异步执行
+    _update_task(task_id, params=params)
     asyncio.create_task(_run_generation(task_id, params))
     return {"taskId": task_id, "status": "queued"}
+
+
+class RefineRequest(BaseModel):
+    instruction: str  # 用户在问答区提出的修改意见
+
+
+@app.post("/api/courseware/{task_id}/refine")
+async def refine_courseware(task_id: str, req: RefineRequest):
+    """按用户修改意见重跑生成：沿用原参数 + 累积修改意见，产出新版文件"""
+    task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="当前正在生成中，请稍候再提修改")
+
+    instruction = req.instruction.strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="请填写修改意见")
+
+    params = dict(task.get("params") or {})
+    if not params:
+        raise HTTPException(status_code=400, detail="该任务缺少生成参数，无法修改")
+
+    revisions = list(task.get("revisions") or [])
+    revisions.append(instruction)
+    params["revision"] = "；".join(revisions)
+
+    # 复用同一 task_id：下载地址不变，完成即覆盖为新版文件
+    _update_task(
+        task_id,
+        params=params,
+        revisions=revisions,
+        status="processing",
+        progress=0,
+        stage="正在按修改意见调整…",
+        filename=None,
+        filepath=None,
+        error=None,
+    )
+    asyncio.create_task(_run_generation(task_id, params))
+    return {"taskId": task_id, "status": "processing", "revisions": revisions}
 
 
 def _render_local_ppt(content: dict, template_id: str):
@@ -173,21 +238,24 @@ def _render_local_ppt(content: dict, template_id: str):
 
 async def _run_generation(task_id: str, params: dict):
     """后台执行生成流程并逐步推送进度"""
+    revision = params.get("revision", "")
     try:
-        _update_task(task_id, status="processing", progress=0, stage="AI 正在构思课件结构...")
+        _update_task(task_id, status="processing", progress=0, stage="正在整理内容结构…")
         await asyncio.sleep(0.3)
 
-        # 1. AI 生成内容
-        _update_task(task_id, progress=25, stage="调用 AI 生成课件内容...")
+        # 1. 生成内容
+        _update_task(task_id, progress=25, stage="正在编写内容…")
         if params["type"] == "ppt":
             content = await generate_ppt_content(
                 params["subject"], params["topic"],
                 params["grade"], params["style"], params["outline"],
+                revision,
             )
         elif params["type"] == "doc":
             content = await generate_doc_content(
                 params["subject"], params["topic"],
                 params["grade"], params["requirements"],
+                revision,
             )
         elif params["type"] == "exam":
             content = await generate_exam_content(
@@ -198,14 +266,26 @@ async def _run_generation(task_id: str, params: dict):
                 fill_count=int(params.get("fillCount", 6)),
                 essay_count=int(params.get("essayCount", 4)),
                 generate_ab=params.get("generateAB", "false").lower() == "true",
+                usage_scene=params.get("usageScene", ""),
+                assessment=params.get("assessment", ""),
+                target=params.get("target", ""),
+                student_profile=params.get("studentProfile", ""),
+                revision=revision,
             )
         else:
             content = await generate_quiz_content(
                 params["subject"], params["topic"],
                 params["grade"], params["difficulty"],
+                scenario=params.get("scenario", ""),
+                count=int(params.get("count") or 8),
+                question_types=params.get("questionTypes", ""),
+                target=params.get("target", ""),
+                student_profile=params.get("studentProfile", ""),
+                assessment=params.get("assessment", ""),
+                revision=revision,
             )
 
-        _update_task(task_id, progress=60, stage="正在渲染文件...")
+        _update_task(task_id, progress=60, stage="正在排版导出…")
         await asyncio.sleep(0.2)
 
         # 2. 渲染文件
@@ -220,14 +300,14 @@ async def _run_generation(task_id: str, params: dict):
             filepath, filename = None, None
 
             if engine == "spark":
-                _update_task(task_id, progress=70, stage="正在调用讯飞 PPT 模型生成中...")
+                _update_task(task_id, progress=70, stage="正在排版并自动配图…")
                 # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
                 spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
                 if spark_result:
                     filepath, filename = spark_result
                 else:
                     # 讯飞不可用/失败 → 回退本地模板渲染，保证任务不中断
-                    _update_task(task_id, stage="讯飞生成不可用，回退本地模版渲染...")
+                    _update_task(task_id, stage="自动排版不可用，改用本地模版…")
 
             if not filepath:
                 filepath, filename = _render_local_ppt(content, template_id)
@@ -243,7 +323,7 @@ async def _run_generation(task_id: str, params: dict):
 
     except Exception as e:
         _update_task(task_id, status="failed", error=str(e),
-                      stage=f"生成失败: {str(e)[:80]}")
+                      stage=f"生成失败：{str(e)[:80]}")
 
 
 # ── API: 历史记录 ─────────────────────────────────────────────
@@ -408,25 +488,18 @@ def list_templates():
 # ── API: 讯飞智文 PPT 模板列表 ─────────────────────────────────
 
 @app.get("/api/spark/templates")
-async def list_spark_templates(page: int = Query(1, ge=1)):
-    """返回讯飞智文模板列表（上游固定每页 10 条，靠 page 翻页）。
+async def list_spark_templates():
+    """返回讯飞智文模板列表。
 
-    失败（未配置凭据 / 网络异常）时返回空列表 + error，不抛 500，
-    以便前端在讯飞不可用时仍能正常展示本地模板。
+    上游模板接口不支持翻页 / 筛选（任何参数都返回同一批），因此一次性返回
+    全部可用模板，total 为去重后的真实条数。失败（未配置凭据 / 网络异常）
+    时返回空列表 + error，不抛 500，以便前端优雅降级。
     """
     try:
-        data = await asyncio.to_thread(get_spark_templates, "not_free", page)
-        return {
-            "templates": data.get("templates", []),
-            "total": data.get("total", 0),
-            "page": page,
-            "pageSize": 10,
-        }
+        data = await asyncio.to_thread(get_spark_templates, "not_free")
+        return {"templates": data.get("templates", []), "total": data.get("total", 0)}
     except Exception as e:
-        return {
-            "templates": [], "total": 0, "page": page, "pageSize": 10,
-            "error": str(e)[:200],
-        }
+        return {"templates": [], "total": 0, "error": str(e)[:200]}
 
 
 @app.get("/api/skill/templates/{slug}/preview")
