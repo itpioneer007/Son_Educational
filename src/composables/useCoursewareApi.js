@@ -16,6 +16,11 @@ const API_BASE = "http://localhost:8000/api/courseware"
  * @param {string} [params.outline] - 大纲要求
  * @param {string} [params.requirements] - 其他要求
  * @param {string} [params.difficulty] - 难度
+ * @param {string} [params.template] - 本地 PPT 模版 ID
+ * @param {'spark'|'local'} [params.engine] - PPT 生成引擎（讯飞智文 / 本地模板）
+ * @param {string} [params.sparkTemplateId] - 讯飞模板 ID，为空用后端默认
+ * @param {boolean} [params.isCardNote] - 讯飞：是否生成演讲备注
+ * @param {boolean} [params.isFigure] - 讯飞：是否自动配图
  * @returns {Promise<{taskId: string, status: string}>}
  */
 export async function submitCoursewareTask(params) {
@@ -29,6 +34,12 @@ export async function submitCoursewareTask(params) {
   if (params.requirements) formData.append("requirements", params.requirements)
   if (params.difficulty) formData.append("difficulty", params.difficulty)
   if (params.template) formData.append("template", params.template)
+
+  // PPT 生成引擎与讯飞参数
+  if (params.engine) formData.append("engine", params.engine)
+  if (params.sparkTemplateId) formData.append("sparkTemplateId", params.sparkTemplateId)
+  if (params.isCardNote !== undefined) formData.append("isCardNote", String(params.isCardNote))
+  if (params.isFigure !== undefined) formData.append("isFigure", String(params.isFigure))
 
   // 如果有参考文件，附加上传
   if (params.files?.length) {

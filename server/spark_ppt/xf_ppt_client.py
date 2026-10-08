@@ -17,7 +17,9 @@
 import base64
 import hashlib
 import hmac
+import json
 import os
+import sys
 import time
 
 import requests
@@ -51,9 +53,104 @@ def _headers(app_id: str, api_secret: str) -> dict:
 
 
 def _load_config():
-    """读取 config/spark_config.py（该目录已由 adapter 加入 sys.path）。"""
+    """读取 config/spark_config.py。"""
+    config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+    if config_dir not in sys.path:
+        sys.path.insert(0, config_dir)
     import spark_config
     return spark_config
+
+
+# ════════════════════════════════════════════════════════════════
+# 模板列表查询
+# ════════════════════════════════════════════════════════════════
+
+def _extract_preview(item: dict) -> str:
+    """detailImage 是 JSON 字符串，内含各页封面图；取标题封面图作预览。"""
+    detail = item.get("detailImage")
+    if isinstance(detail, str) and detail.strip():
+        try:
+            images = json.loads(detail)
+        except ValueError:
+            images = None
+        if isinstance(images, dict):
+            for key in ("titleCoverImage", "titleCoverImageLarge",
+                        "catalogueCoverImage", "contentCoverImage"):
+                if images.get(key):
+                    return images[key]
+    return item.get("thumbnail") or item.get("coverUrl") or item.get("preview") or ""
+
+
+def _normalize_templates(data) -> list:
+    """解析讯飞模板列表响应。
+
+    真实结构：data = {total: N, records: [{templateIndexId, style, color,
+    industry, pageCount, payType, detailImage(JSON字符串)}]}
+    同时兼容 data 为 list / {templates:[...]} / {list:[...]} 的形态。
+    """
+    if isinstance(data, dict):
+        items = data.get("records") or data.get("templates") or data.get("list") or []
+    elif isinstance(data, list):
+        items = data
+    else:
+        items = []
+
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        template_id = (
+            item.get("templateIndexId") or item.get("templateId")
+            or item.get("template_id") or item.get("id") or item.get("key")
+        )
+        if not template_id:
+            continue
+        style = str(item.get("style") or "").strip()
+        color = str(item.get("color") or "").strip()
+        name = (
+            item.get("name") or item.get("title")
+            or " · ".join(p for p in (style, color) if p)
+            or str(template_id)
+        )
+        result.append({
+            "id": str(template_id),
+            "name": name,
+            "preview": _extract_preview(item),
+            "style": style,
+            "color": color,
+            "industry": str(item.get("industry") or "").strip(),
+        })
+    return result
+
+
+def get_templates(pay_type: str = "not_free", page_num: int = 1) -> dict:
+    """查询讯飞 PPT 模板列表。
+
+    注意：上游对 pageSize / style / color / industry 过滤参数不生效，
+    固定每页返回 10 条，因此只能靠 pageNum 翻页。
+
+    返回 {"total": 总数, "templates": [{id, name, preview, style, color, industry}]}
+    """
+    cfg = _load_config()
+    if not cfg.APP_ID or not cfg.API_SECRET:
+        raise RuntimeError("未配置讯飞凭据，无法查询模板列表")
+
+    resp = requests.get(
+        f"{_API_BASE}/template/list",
+        params={"payType": pay_type, "pageNum": page_num, "pageSize": 10},
+        headers=_headers(cfg.APP_ID, cfg.API_SECRET),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("code") != 0:
+        raise RuntimeError(
+            f"查询讯飞模板失败: code={payload.get('code')} desc={payload.get('desc')}"
+        )
+    data = payload.get("data")
+    templates = _normalize_templates(data)
+    total = data.get("total") if isinstance(data, dict) else None
+    return {"total": int(total or len(templates)), "templates": templates}
 
 
 # ════════════════════════════════════════════════════════════════
@@ -130,16 +227,17 @@ def build_xf_outline(content: dict) -> dict:
 # 讯飞接口调用
 # ════════════════════════════════════════════════════════════════
 
-def create_ppt_task(app_id: str, api_secret: str, query: str, outline: dict, cfg) -> str:
+def create_ppt_task(app_id: str, api_secret: str, *, query: str, outline: dict,
+                    cfg, template_id: str, is_card_note: bool, is_figure: bool) -> str:
     """创建 PPT 生成任务，返回 sid。"""
     body = {
         "query": query,
         "outline": outline,
-        "templateId": cfg.TEMPLATE_ID,
+        "templateId": template_id,
         "author": cfg.AUTHOR,
-        "isCardNote": cfg.IS_CARD_NOTE,
+        "isCardNote": is_card_note,
         "search": False,
-        "isFigure": cfg.IS_FIGURE,
+        "isFigure": is_figure,
         "aiImage": cfg.AI_IMAGE,
     }
     resp = requests.post(
@@ -199,19 +297,40 @@ def _download(url: str, dest_path: str):
 # 对 adapter 暴露的入口
 # ════════════════════════════════════════════════════════════════
 
-def generate_pptx(outline: dict, output_path: str) -> str:
-    """按 DeepSeek 大纲调用讯飞智文生成 pptx，返回本地文件路径。"""
+def _to_bool(value, default: bool) -> bool:
+    """FormData 传来的布尔是字符串，这里统一归一化。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def generate_pptx(outline: dict, output_path: str, options: dict = None) -> str:
+    """按 DeepSeek 大纲调用讯飞智文生成 pptx，返回本地文件路径。
+
+    options 可覆盖默认配置：sparkTemplateId / isCardNote / isFigure
+    """
     cfg = _load_config()
+    options = options or {}
     if not cfg.APP_ID or not cfg.API_SECRET:
         raise RuntimeError(
             "未配置讯飞凭据：请在 server/spark_ppt/config/spark_config.py "
             "中填写 APP_ID 与 API_SECRET"
         )
 
+    template_id = str(options.get("sparkTemplateId") or "").strip() or cfg.TEMPLATE_ID
+    is_card_note = _to_bool(options.get("isCardNote"), cfg.IS_CARD_NOTE)
+    is_figure = _to_bool(options.get("isFigure"), cfg.IS_FIGURE)
+
     query = build_query(outline)
     xf_outline = build_xf_outline(outline)
 
-    sid = create_ppt_task(cfg.APP_ID, cfg.API_SECRET, query, xf_outline, cfg)
+    sid = create_ppt_task(
+        cfg.APP_ID, cfg.API_SECRET,
+        query=query, outline=xf_outline, cfg=cfg,
+        template_id=template_id, is_card_note=is_card_note, is_figure=is_figure,
+    )
     ppt_url = wait_for_ppt(cfg.APP_ID, cfg.API_SECRET, sid, cfg)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

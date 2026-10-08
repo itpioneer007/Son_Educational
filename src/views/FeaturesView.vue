@@ -76,6 +76,41 @@ async function fetchPptTemplates() {
   }
 }
 
+// ==================== 讯飞智文模板数据 ====================
+// 上游接口固定每页返回 10 条，只能靠 page 翻页
+const SPARK_PAGE_SIZE = 10;
+const sparkTemplates = ref([]);
+const sparkTemplateLoading = ref(false);
+const sparkTemplateError = ref("");
+const sparkTemplatePage = ref(1);
+const sparkTemplateTotal = ref(0);
+
+const sparkTotalPages = computed(() =>
+  Math.max(1, Math.ceil(sparkTemplateTotal.value / SPARK_PAGE_SIZE)),
+);
+
+async function fetchSparkTemplates(page = 1) {
+  sparkTemplateLoading.value = true;
+  sparkTemplateError.value = "";
+  try {
+    const res = await fetch(
+      `http://localhost:8000/api/spark/templates?page=${page}`,
+    );
+    const data = await res.json();
+    sparkTemplates.value = data.templates || [];
+    sparkTemplateTotal.value = data.total || 0;
+    sparkTemplatePage.value = data.page || page;
+    if (data.error) sparkTemplateError.value = data.error;
+  } catch (e) {
+    console.warn("获取讯飞模板列表失败:", e);
+    sparkTemplates.value = [];
+    sparkTemplateTotal.value = 0;
+    sparkTemplateError.value = "无法连接后端服务，可稍后重试";
+  } finally {
+    sparkTemplateLoading.value = false;
+  }
+}
+
 // 拼完整预览图地址：后端返回 /api/... 相对路径。
 // 若 preview 不是真实图片路径（早期模板误把风格描述放进预览字段），
 // 返回空，模板卡不渲染破损的 <img>。
@@ -137,6 +172,13 @@ const skillTemplateCapacity = computed(() => {
 // 当前手动选中的 PPT 模版对象（用于展示预览图 / 引擎信息）
 const selectedPptTemplate = computed(
   () => pptTemplates.value.find((t) => t.id === pptForm.value.template) || null,
+);
+
+// 当前选中的讯飞模板对象（用于展示预览图）
+const selectedSparkTemplate = computed(
+  () =>
+    sparkTemplates.value.find((t) => t.id === pptForm.value.sparkTemplateId) ||
+    null,
 );
 
 // 当前所选学科对应的教学目标 / 重点难点预设
@@ -638,7 +680,11 @@ const pptForm = ref({
   keyCustom: "",
   outlineCustom: "", // 自定义章节大纲（可选，每行一个章节）
   referenceFile: null,
-  template: "", // PPT 模版 ID，为空时自动匹配
+  engine: "spark", // 生成引擎：spark(讯飞智文) | local(本地模板)
+  template: "", // 本地 PPT 模版 ID，为空时自动匹配
+  sparkTemplateId: "", // 讯飞模板 ID，为空用后端默认模板
+  isCardNote: true, // 讯飞：是否生成演讲备注
+  isFigure: true, // 讯飞：是否自动配图
 });
 
 const docForm = ref({
@@ -2726,13 +2772,19 @@ function handlePptGenerate() {
       `请严格按照以下章节结构组织课件内容，每章一节扉页：\n${sections.join("\n")}`,
     );
   }
+  const engine = pptForm.value.engine === "local" ? "local" : "spark";
   callApiGenerate("ppt", {
     subject,
     topic: pptForm.value.topic,
     grade: pptForm.value.grade,
     style: pptForm.value.style || "实验探究型",
     outline: outlineParts.join("；"),
-    template: pptForm.value.template || "",
+    engine,
+    template: engine === "local" ? pptForm.value.template || "" : "",
+    sparkTemplateId:
+      engine === "spark" ? pptForm.value.sparkTemplateId || "" : "",
+    isCardNote: pptForm.value.isCardNote,
+    isFigure: pptForm.value.isFigure,
   });
 }
 
@@ -3199,6 +3251,8 @@ async function applyAssistantContent(type, content) {
 onMounted(() => {
   // 加载 PPT 模版列表
   fetchPptTemplates();
+  // 加载讯飞智文模板（仅元数据，不消耗额度）
+  fetchSparkTemplates();
   // 处理路由参数：预选模版和面板
   const queryPanel = route.query.panel;
   const queryTemplate = route.query.template;
@@ -3207,6 +3261,8 @@ onMounted(() => {
   }
   if (queryTemplate) {
     pptForm.value.template = queryTemplate;
+    // 路由带了本地模版 ID，切到本地引擎，避免被讯飞引擎忽略
+    pptForm.value.engine = "local";
   }
   // 处理 AI 助手「转入生成」跳转参数：type=topic/outline 自动预填
   const queryType = route.query.type;
@@ -4003,8 +4059,133 @@ onUnmounted(() => {
                 >
               </label>
 
-              <!-- PPT 模版选择 -->
-              <div class="template-select-section">
+              <!-- 生成引擎切换 -->
+              <div class="engine-switch">
+                <div class="engine-switch__head">
+                  <span class="engine-switch__title">PPT 生成引擎</span>
+                  <span class="engine-switch__hint">
+                    {{
+                      pptForm.engine === "spark"
+                        ? "AI 智能排版 + 自动配图，效果更精美"
+                        : "按预设版式快速生成，稳定可预期"
+                    }}
+                  </span>
+                </div>
+                <div class="engine-switch__options">
+                  <button
+                    type="button"
+                    class="engine-switch__btn"
+                    :class="{ 'is-active': pptForm.engine === 'spark' }"
+                    @click="pptForm.engine = 'spark'"
+                  >
+                    讯飞智文
+                  </button>
+                  <button
+                    type="button"
+                    class="engine-switch__btn"
+                    :class="{ 'is-active': pptForm.engine === 'local' }"
+                    @click="pptForm.engine = 'local'"
+                  >
+                    本地模板
+                  </button>
+                </div>
+              </div>
+
+              <!-- 讯飞智文参数 -->
+              <div
+                v-if="pptForm.engine === 'spark'"
+                class="template-select-section"
+              >
+                <label class="template-select__label">
+                  讯飞 PPT 模板
+                  <span class="template-select__hint"
+                    >— 由讯飞智文按模板自动排版</span
+                  >
+                </label>
+                <select
+                  v-model="pptForm.sparkTemplateId"
+                  class="template-select__dropdown"
+                >
+                  <option value="">使用默认模板（推荐）</option>
+                  <option v-for="t in sparkTemplates" :key="t.id" :value="t.id">
+                    {{ t.name }} — {{ t.industry }}
+                  </option>
+                </select>
+
+                <div v-if="sparkTemplateLoading" class="engine-note">
+                  正在加载讯飞模板列表…
+                </div>
+                <div
+                  v-else-if="sparkTemplateError"
+                  class="engine-note engine-note--warn"
+                >
+                  {{ sparkTemplateError }}
+                </div>
+
+                <!-- 翻页（上游固定每页 10 条） -->
+                <div v-if="sparkTemplateTotal" class="template-pager">
+                  <button
+                    type="button"
+                    class="template-pager__btn"
+                    :disabled="sparkTemplatePage <= 1 || sparkTemplateLoading"
+                    @click="fetchSparkTemplates(sparkTemplatePage - 1)"
+                  >
+                    上一页
+                  </button>
+                  <span class="template-pager__info">
+                    第 {{ sparkTemplatePage }} / {{ sparkTotalPages }} 页 · 共
+                    {{ sparkTemplateTotal }} 个模板
+                  </span>
+                  <button
+                    type="button"
+                    class="template-pager__btn"
+                    :disabled="
+                      sparkTemplatePage >= sparkTotalPages ||
+                      sparkTemplateLoading
+                    "
+                    @click="fetchSparkTemplates(sparkTemplatePage + 1)"
+                  >
+                    下一页
+                  </button>
+                </div>
+
+                <!-- 选中模板预览 -->
+                <div v-if="selectedSparkTemplate" class="template-preview">
+                  <img
+                    v-if="selectedSparkTemplate.preview"
+                    :src="previewUrl(selectedSparkTemplate.preview)"
+                    alt="模板预览"
+                    class="template-preview__img"
+                  />
+                  <div class="template-preview__meta">
+                    <span class="template-preview__badge">讯飞模板</span>
+                    <span class="template-preview__desc">
+                      {{ selectedSparkTemplate.name }}
+                      <template v-if="selectedSparkTemplate.industry">
+                        · {{ selectedSparkTemplate.industry }}
+                      </template>
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 备注 / 配图开关 -->
+                <div class="engine-options">
+                  <label class="engine-options__item">
+                    <input type="checkbox" v-model="pptForm.isCardNote" />
+                    生成演讲备注
+                  </label>
+                  <label class="engine-options__item">
+                    <input type="checkbox" v-model="pptForm.isFigure" />
+                    自动配图
+                  </label>
+                </div>
+                <small class="field-hint"
+                  >开启备注与配图会消耗更多讯飞额度（约 17 点/次）</small
+                >
+              </div>
+
+              <!-- PPT 模版选择（本地引擎） -->
+              <div v-else class="template-select-section">
                 <label class="template-select__label">
                   <svg
                     width="15"
@@ -12174,6 +12355,130 @@ onUnmounted(() => {
   outline: none;
   border-color: #6366f1;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+/* 生成引擎切换 */
+.engine-switch {
+  margin-top: 1rem;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.engine-switch__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.engine-switch__title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.engine-switch__hint {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.engine-switch__options {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.engine-switch__btn {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.engine-switch__btn:hover {
+  border-color: #c7d2fe;
+}
+
+.engine-switch__btn.is-active {
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+}
+
+/* 讯飞参数：加载 / 错误提示 */
+.engine-note {
+  margin-top: 0.5rem;
+  font-size: 0.73rem;
+  color: #64748b;
+}
+
+.engine-note--warn {
+  color: #b45309;
+}
+
+/* 模板翻页 */
+.template-pager {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.template-pager__btn {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.73rem;
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.template-pager__btn:disabled {
+  color: #94a3b8;
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  cursor: not-allowed;
+}
+
+.template-pager__info {
+  flex: 1;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+/* 讯飞备注 / 配图开关 */
+.engine-options {
+  margin-top: 0.7rem;
+  display: flex;
+  gap: 1.2rem;
+}
+
+.engine-options__item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: #334155;
+  cursor: pointer;
+}
+
+.engine-options__item input {
+  width: 15px;
+  height: 15px;
+  accent-color: #6366f1;
+  cursor: pointer;
 }
 
 .template-auto-hint {

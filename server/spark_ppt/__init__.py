@@ -17,10 +17,14 @@ spark_ppt/
 --------
 把你的脚本放进 spark_ppt/ 后，让脚本暴露以下入口函数即可（二选一）：
 
-    def generate_pptx(outline: dict, output_path: str) -> str:
+    def generate_pptx(outline: dict, output_path: str, options: dict = None) -> str:
         '''outline:      DeepSeek 生成的 PPT 大纲，结构见 ai_service.PPT_SYSTEM_PROMPT
            output_path:  期望输出 pptx 的绝对路径
-           返回值:        实际生成的 pptx 路径(str)，也兼容返回 (路径, 文件名)'''
+           options:      可选覆盖参数，如
+                         {"sparkTemplateId": "...", "isCardNote": "true", "isFigure": "true"}
+           返回值:        实际生成的 pptx 路径(str)，也兼容返回 (路径, 文件名)
+
+        注：也兼容只接收两个参数 (outline, output_path) 的旧签名，adapter 会自动识别。
 
 config/ 目录会自动加入 sys.path，脚本内可直接 import 配置模块读取密钥。
 
@@ -29,5 +33,6 @@ generate_pptx_via_spark() 返回 None，由 main.py 回退到本地模板渲染�
 """
 
 from .adapter import generate_pptx_via_spark
+from .xf_ppt_client import get_templates
 
-__all__ = ["generate_pptx_via_spark"]
+__all__ = ["generate_pptx_via_spark", "get_templates"]

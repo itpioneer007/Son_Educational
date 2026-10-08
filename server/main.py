@@ -38,7 +38,7 @@ from skill_ppt import (
     is_skill_template, generate_skill_pptx,
     get_template_list as get_skill_template_list,
 )
-from spark_ppt import generate_pptx_via_spark
+from spark_ppt import generate_pptx_via_spark, get_templates as get_spark_templates
 
 app = FastAPI(title="EduAI 课件生成 API", version="1.0.0")
 
@@ -126,6 +126,10 @@ async def create_courseware(
     essayCount: str = Form("4"),
     generateAB: str = Form("false"),
     template: str = Form(""),       # PPT 模版 ID，为空时自动根据学科匹配
+    engine: str = Form("spark"),    # PPT 生成引擎：spark(讯飞智文) | local(本地模板)
+    sparkTemplateId: str = Form(""),  # 讯飞模板 ID，为空用后端配置默认模板
+    isCardNote: str = Form("true"),   # 讯飞：是否生成演讲备注
+    isFigure: str = Form("true"),     # 讯飞：是否自动配图
     files: list[UploadFile] = File(default=[]),
 ):
     """
@@ -149,11 +153,22 @@ async def create_courseware(
         "essayCount": essayCount,
         "generateAB": generateAB,
         "template": template,
+        "engine": engine,
+        "sparkTemplateId": sparkTemplateId,
+        "isCardNote": isCardNote,
+        "isFigure": isFigure,
     }
 
     # 后台异步执行
     asyncio.create_task(_run_generation(task_id, params))
     return {"taskId": task_id, "status": "queued"}
+
+
+def _render_local_ppt(content: dict, template_id: str):
+    """本地模板渲染：skill 精品模版走保版式引擎，其余走通用模板。"""
+    if template_id and is_skill_template(template_id):
+        return generate_skill_pptx(content, template_id)
+    return generate_pptx_from_template(content, template_id)
 
 
 async def _run_generation(task_id: str, params: dict):
@@ -199,22 +214,23 @@ async def _run_generation(task_id: str, params: dict):
         content["grade"] = params.get("grade", "")
         content["duration"] = params.get("duration", "45分钟")
         if params["type"] == "ppt":
-            # 两段式流程：DeepSeek 已生成大纲(content)，此处交给讯飞 PPT 模型出稿
+            # 两段式流程：DeepSeek 已生成大纲(content)，此处按引擎选择出稿方式
             template_id = params.get("template", "") or ""
-            _update_task(task_id, progress=70, stage="正在调用讯飞 PPT 模型生成中...")
-            # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
-            spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
+            engine = (params.get("engine") or "spark").lower()
+            filepath, filename = None, None
 
-            if spark_result:
-                filepath, filename = spark_result
-            else:
-                # 讯飞不可用/失败 → 回退本地模板渲染，保证任务不中断
-                _update_task(task_id, stage="讯飞生成不可用，回退本地模版渲染...")
-                # skill 精品模版走保版式引擎
-                if template_id and is_skill_template(template_id):
-                    filepath, filename = generate_skill_pptx(content, template_id)
+            if engine == "spark":
+                _update_task(task_id, progress=70, stage="正在调用讯飞 PPT 模型生成中...")
+                # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
+                spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
+                if spark_result:
+                    filepath, filename = spark_result
                 else:
-                    filepath, filename = generate_pptx_from_template(content, template_id)
+                    # 讯飞不可用/失败 → 回退本地模板渲染，保证任务不中断
+                    _update_task(task_id, stage="讯飞生成不可用，回退本地模版渲染...")
+
+            if not filepath:
+                filepath, filename = _render_local_ppt(content, template_id)
         elif params["type"] == "doc":
             filepath, filename = generate_docx(content)
         elif params["type"] == "exam":
@@ -389,6 +405,30 @@ def list_templates():
     }
 
 
+# ── API: 讯飞智文 PPT 模板列表 ─────────────────────────────────
+
+@app.get("/api/spark/templates")
+async def list_spark_templates(page: int = Query(1, ge=1)):
+    """返回讯飞智文模板列表（上游固定每页 10 条，靠 page 翻页）。
+
+    失败（未配置凭据 / 网络异常）时返回空列表 + error，不抛 500，
+    以便前端在讯飞不可用时仍能正常展示本地模板。
+    """
+    try:
+        data = await asyncio.to_thread(get_spark_templates, "not_free", page)
+        return {
+            "templates": data.get("templates", []),
+            "total": data.get("total", 0),
+            "page": page,
+            "pageSize": 10,
+        }
+    except Exception as e:
+        return {
+            "templates": [], "total": 0, "page": page, "pageSize": 10,
+            "error": str(e)[:200],
+        }
+
+
 @app.get("/api/skill/templates/{slug}/preview")
 def skill_template_preview(slug: str):
     """返回 skill 模版的预览图 preview.png"""
@@ -428,4 +468,8 @@ def startup():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=True)
+
+    # ws="none"：本项目只用 SSE（StreamingResponse）推送进度，不需要 WebSocket。
+    # 且新版 uvicorn 的 WebSocket 实现要求 websockets>=14，而机器上是 websockets 10.4，
+    # 不关掉会导致 worker 启动即 ImportError 崩溃。
+    uvicorn.run("main:app", host=HOST, port=PORT, reload=True, ws="none")

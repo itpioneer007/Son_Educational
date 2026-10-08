@@ -13,6 +13,7 @@ spark_ppt.adapter — 讯飞星火（讯飞智文）PPT 生成适配层
 import os
 import sys
 import re
+import inspect
 import importlib
 import traceback
 
@@ -72,6 +73,24 @@ def _build_output_path(outline: dict) -> str:
     return os.path.join(OUTPUT_DIR, f"{safe_title}_讯飞.pptx")
 
 
+def _call_entry(entry, outline, output_path, options):
+    """调用入口函数，兼容 2 参 / 3 参 两种签名。"""
+    try:
+        sig_params = list(inspect.signature(entry).parameters.values())
+    except (TypeError, ValueError):
+        sig_params = []
+
+    positional = [
+        p for p in sig_params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    has_varargs = any(p.kind == p.VAR_POSITIONAL for p in sig_params)
+
+    if has_varargs or len(positional) >= 3:
+        return entry(outline, output_path, options)
+    return entry(outline, output_path)
+
+
 def generate_pptx_via_spark(outline: dict, params: dict = None):
     """调用讯飞 PPT 脚本生成课件。
 
@@ -92,7 +111,7 @@ def generate_pptx_via_spark(outline: dict, params: dict = None):
 
     output_path = _build_output_path(outline)
     try:
-        result = entry(outline, output_path)
+        result = _call_entry(entry, outline, output_path, params or {})
 
         # 兼容返回 str 路径 或 (路径, 文件名)
         if isinstance(result, (tuple, list)):
