@@ -1,41 +1,49 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
+import { marked } from "marked";
 import AiBadge from "./AiBadge.vue";
 
 /**
- * 内容调整区：生成初版后，用户在这里用一句话说明要改的地方，
- * 提交后由后端带原内容重新生成，满意即可下载新版文件。
+ * 内容调整区：AI 生成的内容（流式）直接展示在这里，用户像对话一样阅读、
+ * 提出修改意见；满意后点击「导出最终内容」才生成可下载文件。
  */
 const props = defineProps({
   // 本条内容由哪些 AI 协同产出（AiBadge 的 name 列表）
   pipeline: { type: Array, default: () => [] },
   title: { type: String, default: "内容调整" },
-  // [{ id, role: 'assistant' | 'user', text, filename }]
+  // [{ id, role, text, content（Markdown）, streaming }]
   messages: { type: Array, default: () => [] },
-  // 是否已有可调整的初版（没有时输入区引导用户先去左侧生成）
+  // 正文已生成（可修改、可导出）
   ready: { type: Boolean, default: false },
   generating: { type: Boolean, default: false },
+  // 正在导出最终文件
+  exporting: { type: Boolean, default: false },
   progress: { type: Number, default: 0 },
   stage: { type: String, default: "" },
-  taskId: { type: [String, Number], default: null },
   filename: { type: String, default: "" },
   placeholder: { type: String, default: "说明要修改的地方…" },
 });
 
-const emit = defineEmits(["send"]);
+const emit = defineEmits(["send", "export"]);
 
-const API_BASE = "http://localhost:8000/api/courseware";
 const draft = ref("");
 const listRef = ref(null);
 
-const downloadUrl = computed(() =>
-  props.taskId ? `${API_BASE}/${props.taskId}/download` : "",
+// 对话里 AI 一方的头像：取该面板最终产出内容的引擎
+// （课件 = 讯飞智文，教案/练习/试卷 = DeepSeek）。
+// 仅作为对话头像出现，不在界面上暴露"生成引擎"字样。
+const assistantEngine = computed(
+  () => props.pipeline[props.pipeline.length - 1] || "deepseek",
 );
 
+// 正文已生成且当前未在处理时，才允许导出最终文件
+const canExport = computed(() => props.ready && !props.generating);
+
 const statusText = computed(() => {
+  if (props.exporting) return "正在导出…";
   if (props.generating) return "生成中";
-  if (props.filename) return "可下载";
-  if (props.ready) return "待调整";
+  if (props.filename) return "已导出";
+  if (props.ready) return "可查看 / 修改";
   return "未开始";
 });
 
@@ -49,13 +57,29 @@ function submit() {
   draft.value = "";
 }
 
-watch(
-  () => props.messages.length,
-  async () => {
-    await nextTick();
-    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight;
-  },
+// Markdown 渲染：流式内容以 Markdown 形式实时呈现
+function renderMd(md) {
+  return marked.parse(md || "", { gfm: true, breaks: true });
+}
+
+// 内容增长（含流式追加）时保持滚动到底部，便于持续阅读
+const contentLength = computed(() =>
+  props.messages.reduce(
+    (n, m) =>
+      n + (m.content ? m.content.length : 0) + (m.text ? m.text.length : 0),
+    0,
+  ),
 );
+
+watch(contentLength, async () => {
+  await nextTick();
+  const el = listRef.value;
+  if (!el) return;
+  // 仅在接近底部时自动跟随，避免打断用户向上翻阅
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+    el.scrollTop = el.scrollHeight;
+  }
+});
 </script>
 
 <template>
@@ -66,17 +90,12 @@ watch(
         class="revise__status"
         :class="{
           'is-active': generating,
-          'is-ready': !generating && filename,
+          'is-ready': !generating && ready,
         }"
         aria-live="polite"
         >{{ statusText }}</span
       >
     </header>
-
-    <div v-if="pipeline.length" class="revise__engines">
-      <span class="revise__engines-label">生成引擎</span>
-      <AiBadge v-for="k in pipeline" :key="k" :name="k" size="sm" />
-    </div>
 
     <div ref="listRef" class="revise__list">
       <article
@@ -85,11 +104,35 @@ watch(
         class="revise__msg"
         :class="m.role"
       >
-        <p class="revise__bubble">{{ m.text }}</p>
-        <p v-if="m.filename" class="revise__file">
-          <span class="revise__file-name">{{ m.filename }}</span>
-          <a class="revise__download" :href="downloadUrl">下载文件</a>
-        </p>
+        <span class="revise__avatar" aria-hidden="true">
+          <AiBadge
+            v-if="m.role === 'assistant'"
+            :name="assistantEngine"
+            size="md"
+            :show-label="false"
+          />
+          <svg
+            v-else
+            viewBox="0 0 24 24"
+            width="15"
+            height="15"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="8" r="3.6" />
+            <path d="M5 20c0-3.4 3.1-5.6 7-5.6s7 2.2 7 5.6" />
+          </svg>
+        </span>
+        <!-- AI 生成的正文以 Markdown 形式实时展示，可滚动阅读 -->
+        <div
+          v-if="m.role === 'assistant' && m.content"
+          class="revise__bubble revise__md"
+          v-html="renderMd(m.content)"
+        ></div>
+        <p v-else class="revise__bubble">{{ m.text }}</p>
       </article>
 
       <div v-if="generating" class="revise__working" aria-live="polite">
@@ -118,14 +161,26 @@ watch(
         aria-label="修改意见"
         @keydown.enter.exact.prevent="submit"
       ></textarea>
-      <button
-        type="button"
-        class="revise__send"
-        :disabled="!canSend"
-        @click="submit"
-      >
-        提交修改
-      </button>
+      <div class="revise__actions">
+        <!-- 满意后再导出：点击才生成最终文件并下载 -->
+        <button
+          type="button"
+          class="revise__export"
+          :class="{ 'is-disabled': !canExport }"
+          :disabled="!canExport"
+          @click="emit('export')"
+        >
+          {{ exporting ? "正在导出…" : "导出最终内容" }}
+        </button>
+        <button
+          type="button"
+          class="revise__send"
+          :disabled="!canSend"
+          @click="submit"
+        >
+          提交修改
+        </button>
+      </div>
 
       <!-- 底部扩展区：课件面板在此挂载模板选择条 -->
       <slot name="footer-tools" />
@@ -180,20 +235,6 @@ watch(
   background: rgba(35, 195, 178, 0.14);
 }
 
-.revise__engines {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 9px 20px;
-  background: #fbfbfd;
-  border-bottom: 1px solid var(--border);
-}
-
-.revise__engines-label {
-  font-size: 0.72rem;
-  color: var(--ink-muted);
-}
-
 .revise__list {
   display: flex;
   flex-direction: column;
@@ -208,9 +249,9 @@ watch(
 
 .revise__msg {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 88%;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 92%;
 }
 
 .revise__msg.assistant {
@@ -219,6 +260,23 @@ watch(
 
 .revise__msg.user {
   align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.revise__avatar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+}
+
+.revise__msg.user .revise__avatar {
+  color: #fff;
+  background: var(--accent);
+  border-radius: 50%;
 }
 
 .revise__bubble {
@@ -238,37 +296,55 @@ watch(
   background: var(--accent);
 }
 
-.revise__file {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  margin: 0;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+/* ── AI 正文（Markdown）排版 ─────────────────── */
+.revise__md {
+  white-space: normal;
+  width: 100%;
 }
 
-.revise__file-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.8rem;
+.revise__md :deep(h1) {
+  margin: 2px 0 8px;
+  font-size: 1.02rem;
+  font-weight: 700;
   color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.revise__download {
-  flex: none;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--accent);
-  text-decoration: none;
+.revise__md :deep(h2) {
+  margin: 14px 0 6px;
+  padding-left: 8px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+  border-left: 3px solid var(--accent);
 }
 
-.revise__download:hover {
-  text-decoration: underline;
+.revise__md :deep(h3) {
+  margin: 12px 0 4px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+
+.revise__md :deep(p) {
+  margin: 6px 0;
+}
+
+.revise__md :deep(ul),
+.revise__md :deep(ol) {
+  margin: 6px 0 6px 18px;
+  padding: 0;
+}
+
+.revise__md :deep(li) {
+  margin: 3px 0;
+}
+
+.revise__md :deep(strong) {
+  color: var(--ink);
+}
+
+.revise__md :deep(h1:first-child) {
+  margin-top: 0;
 }
 
 .revise__working {
@@ -277,7 +353,8 @@ watch(
   gap: 6px;
   align-self: flex-start;
   width: 100%;
-  max-width: 88%;
+  max-width: 92%;
+  padding-left: 38px;
 }
 
 .revise__bar {
@@ -329,8 +406,47 @@ watch(
   cursor: not-allowed;
 }
 
+.revise__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.revise__export {
+  padding: 10px 18px;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  text-decoration: none;
+  background: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-out);
+}
+
+.revise__export:hover {
+  background: rgba(43, 108, 176, 0.08);
+  transform: translateY(-1px);
+}
+
+.revise__export.is-disabled {
+  color: #9aa1ac;
+  background: #f7f7f9;
+  border-color: var(--border-strong);
+  cursor: not-allowed;
+}
+
+.revise__export.is-disabled:hover {
+  background: #f7f7f9;
+  transform: none;
+}
+
 .revise__send {
-  align-self: flex-end;
   padding: 10px 22px;
   font-family: inherit;
   font-size: 0.86rem;
@@ -358,14 +474,15 @@ watch(
 
 .revise__input:focus-visible,
 .revise__send:focus-visible,
-.revise__download:focus-visible {
+.revise__export:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .revise__bar-fill,
-  .revise__send {
+  .revise__send,
+  .revise__export {
     transition: none;
   }
 }

@@ -123,24 +123,19 @@ def _normalize_templates(data) -> list:
     return result
 
 
-def get_templates(pay_type: str = "not_free") -> dict:
-    """查询讯飞 PPT 模板列表。
+# 模板列表缓存：上游按页拉取耗时明显，进程内缓存一段时间，避免每次进市场都重拉
+_TEMPLATE_CACHE: dict = {}
+_TEMPLATE_CACHE_TTL = 30 * 60  # 秒
+_TEMPLATE_PAGE_SIZE = 50       # 每页条数（上游上限）
+_TEMPLATE_MAX_PAGES = 2        # 抓取前 2 页，约 100 个模板
 
-    实测结论：上游 /template/list 对 pageNum / pageSize / style / color /
-    industry / payType 等参数一律不生效——无论怎么传，都返回同一批模板；
-    响应里的 total（如 719）是从不变化的虚高值，不能作为数量展示。
-    因此这里不再翻页，直接取回全部可用模板并按 id 去重，total 取去重后的真实条数。
-
-    返回 {"total": 真实条数, "templates": [{id, name, preview, style, color, industry}]}
-    """
-    cfg = _load_config()
-    if not cfg.APP_ID or not cfg.API_SECRET:
-        raise RuntimeError("未配置讯飞凭据，无法查询模板列表")
-
-    resp = requests.get(
+# 讯飞模板接口的正确用法：分页参数必须放在 JSON Body 里（放 query string 会被忽略，
+# 导致每次只返回固定的一批）。用 body 传 pageNum/pageSize 才能翻页取到更多模板。
+def _fetch_template_page(app_id: str, api_secret: str, pay_type: str, page_num: int) -> dict:
+    resp = requests.post(
         f"{_API_BASE}/template/list",
-        params={"payType": pay_type, "pageNum": 1, "pageSize": 50},
-        headers=_headers(cfg.APP_ID, cfg.API_SECRET),
+        json={"payType": pay_type, "pageNum": page_num, "pageSize": _TEMPLATE_PAGE_SIZE},
+        headers=_headers(app_id, api_secret),
         timeout=30,
     )
     resp.raise_for_status()
@@ -149,13 +144,32 @@ def get_templates(pay_type: str = "not_free") -> dict:
         raise RuntimeError(
             f"查询讯飞模板失败: code={payload.get('code')} desc={payload.get('desc')}"
         )
+    return payload.get("data")
+
+
+def get_templates(pay_type: str = "not_free") -> dict:
+    """查询讯飞 PPT 模板列表（分页抓取 + 去重 + 进程内缓存）。
+
+    返回 {"total": 真实条数, "templates": [{id, name, preview, style, color, industry}]}
+    """
+    cached = _TEMPLATE_CACHE.get(pay_type)
+    if cached and time.time() - cached["ts"] < _TEMPLATE_CACHE_TTL:
+        return {"total": len(cached["templates"]), "templates": cached["templates"]}
+
+    cfg = _load_config()
+    if not cfg.APP_ID or not cfg.API_SECRET:
+        raise RuntimeError("未配置讯飞凭据，无法查询模板列表")
 
     unique, seen = [], set()
-    for t in _normalize_templates(payload.get("data")):
-        if t["id"] in seen:
-            continue
-        seen.add(t["id"])
-        unique.append(t)
+    for page_num in range(1, _TEMPLATE_MAX_PAGES + 1):
+        data = _fetch_template_page(cfg.APP_ID, cfg.API_SECRET, pay_type, page_num)
+        for t in _normalize_templates(data):
+            if t["id"] in seen:
+                continue
+            seen.add(t["id"])
+            unique.append(t)
+
+    _TEMPLATE_CACHE[pay_type] = {"ts": time.time(), "templates": unique}
     return {"total": len(unique), "templates": unique}
 
 

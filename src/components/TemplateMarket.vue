@@ -6,7 +6,8 @@ import AiBadge from "./AiBadge.vue";
  * PPT 模板选择：只对接讯飞智文模板。
  * 常驻「模板条」（当前模板 + 备注/配图开关 + 模板市场入口）+ 模板市场弹层。
  * 模板数据由父级持有，本组件只做展示与选择，通过事件回写。
- * 上游模板接口不支持翻页/筛选，可用模板就固定那一批，因此市场内按风格归类展示。
+ * 模板数量较多（约百个），市场内按风格归类 + 关键词检索，并渐进渲染（先渲染一批，
+ * 点击「加载更多」再追加），避免一次性渲染上百张预览图造成卡顿。
  */
 const props = defineProps({
   sparkTemplates: { type: Array, default: () => [] },
@@ -30,6 +31,10 @@ const open = ref(false);
 const keyword = ref("");
 const activeStyle = ref("");
 const detail = ref(null);
+
+// 渐进渲染：每批渲染的模板数量
+const PAGE_SIZE = 24;
+const visibleCount = ref(PAGE_SIZE);
 
 const currentTemplate = computed(
   () =>
@@ -58,6 +63,28 @@ const filteredTemplates = computed(() => {
       .toLowerCase()
       .includes(kw);
   });
+});
+
+// 当前实际渲染的模板（分页切片）
+const visibleTemplates = computed(() =>
+  filteredTemplates.value.slice(0, visibleCount.value),
+);
+
+const hasMore = computed(
+  () => filteredTemplates.value.length > visibleCount.value,
+);
+
+const remainCount = computed(
+  () => filteredTemplates.value.length - visibleCount.value,
+);
+
+function loadMore() {
+  visibleCount.value += PAGE_SIZE;
+}
+
+// 筛选条件变化时回到首批，避免"加载更多"状态错位
+watch([keyword, activeStyle], () => {
+  visibleCount.value = PAGE_SIZE;
 });
 
 function imgOf(t) {
@@ -215,7 +242,7 @@ watch(open, (v) => {
 
               <div v-if="filteredTemplates.length" class="mk-grid">
                 <button
-                  v-for="t in filteredTemplates"
+                  v-for="t in visibleTemplates"
                   :key="t.id"
                   type="button"
                   class="mk-card"
@@ -239,7 +266,15 @@ watch(open, (v) => {
                   }}</span>
                 </button>
               </div>
-              <p v-else-if="!sparkLoading" class="mk-content__empty">
+              <div v-if="hasMore" class="mk-more">
+                <button type="button" class="mk-more__btn" @click="loadMore">
+                  加载更多（还有 {{ remainCount }} 个）
+                </button>
+              </div>
+              <p
+                v-if="!filteredTemplates.length && !sparkLoading"
+                class="mk-content__empty"
+              >
                 没有匹配的模板，试试其他关键词
               </p>
             </section>
@@ -559,6 +594,29 @@ watch(open, (v) => {
   gap: 12px;
 }
 
+.mk-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 4px;
+}
+
+.mk-more__btn {
+  padding: 9px 22px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 0.16s var(--ease-out);
+}
+
+.mk-more__btn:hover {
+  background: rgba(43, 108, 176, 0.08);
+}
+
 .mk-card {
   display: flex;
   flex-direction: column;
@@ -729,6 +787,7 @@ watch(open, (v) => {
 .mk-modal__close:focus-visible,
 .mk-card:focus-visible,
 .mk-chip:focus-visible,
+.mk-more__btn:focus-visible,
 .mk-content__retry:focus-visible,
 .mk-detail__use:focus-visible,
 .mk-detail__default:focus-visible {

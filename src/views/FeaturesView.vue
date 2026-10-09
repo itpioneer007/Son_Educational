@@ -10,6 +10,7 @@ import {
 import {
   submitCoursewareTask,
   refineCoursewareTask,
+  exportCoursewareTask,
   subscribeProgress,
   downloadFile,
   getCoursewareHistory as fetchApiHistory,
@@ -44,11 +45,13 @@ const currentTaskId = ref(null);
 const currentTaskProgress = ref(0);
 const currentTaskStage = ref("");
 const showProgress = ref(false);
-const generatedFilename = ref("");
+const generatedFilename = ref(""); // 导出完成后的文件名
+const contentReady = ref(false); // 正文已生成（可在右侧阅读 / 修改 / 导出）
+const exporting = ref(false); // 正在导出最终文件
 
 // ── 内容制作「内容调整」问答区 ─────────────────────────────────
-// 左侧表单收集创作要素并提交生成初版；右侧问答区供用户提出修改意见，
-// 提交后按意见重新生成内容，并给出新版文件下载。
+// 左侧表单收集创作要素并提交流式生成；生成内容直接展示在右侧问答区，
+// 用户像对话一样阅读并提出修改意见，满意后点击「导出最终内容」再生成文件。
 const REVISE_TITLE = {
   ppt: "课件内容调整",
   doc: "教案内容调整",
@@ -84,22 +87,46 @@ const currentRevisePlaceholder = computed(
 const currentReviseMessages = computed(
   () => reviseMessages.value[activePanel.value] || [],
 );
-// 已有可下载的初版内容时，才允许提交修改意见
-const reviseReady = computed(() => Boolean(generatedFilename.value));
+// 正文已生成后，才允许提交修改意见 / 导出
+const reviseReady = computed(() => contentReady.value);
 
-// 初版生成完成后写入一条引导消息（含新文件下载入口）
-function pushInitialMessage(panel, filename) {
-  reviseMessages.value[panel] = [
-    {
-      id: nextReviseId(),
-      role: "assistant",
-      text: "初版内容已生成。可在下方说明需要调整的地方，我会据此更新文件。",
-      filename: filename || "",
-    },
-  ];
+// 新建一条流式正文消息（AI 回复），随 delta 增量填充 content
+function startStreamMessage(panel) {
+  const msg = {
+    id: nextReviseId(),
+    role: "assistant",
+    content: "",
+    streaming: true,
+  };
+  reviseMessages.value[panel].push(msg);
+  return msg;
 }
 
-// 提交修改意见：按意见重跑生成，产出新版文件
+// 订阅流式生成：正文增量写入消息，完成置为可修改 / 可导出
+function subscribeStream(streamMsg) {
+  return {
+    onDelta: (text) => {
+      streamMsg.content += text;
+    },
+    onProgress: (data) => {
+      currentTaskProgress.value = data.progress;
+      currentTaskStage.value = data.stage;
+    },
+    onDone: () => {
+      isGenerating.value = false;
+      streamMsg.streaming = false;
+      contentReady.value = true;
+    },
+    onError: (err) => {
+      isGenerating.value = false;
+      streamMsg.streaming = false;
+      if (!streamMsg.content) streamMsg.text = `生成失败：${err.message}`;
+      showToast(`生成失败：${err.message}`);
+    },
+  };
+}
+
+// 提交修改意见：按意见重新流式生成，产出新版正文
 async function handleReviseSend(text) {
   const panel = activePanel.value;
   const taskId = currentTaskId.value;
@@ -112,48 +139,63 @@ async function handleReviseSend(text) {
   list.push({ id: nextReviseId(), role: "user", text });
 
   isGenerating.value = true;
+  exporting.value = false;
   currentTaskProgress.value = 0;
   currentTaskStage.value = "正在按修改意见调整…";
+  contentReady.value = false;
   generatedFilename.value = "";
+
+  const streamMsg = startStreamMessage(panel);
 
   try {
     await refineCoursewareTask(taskId, text);
+    subscribeProgress(taskId, subscribeStream(streamMsg));
+  } catch (err) {
+    isGenerating.value = false;
+    streamMsg.streaming = false;
+    if (!streamMsg.content) streamMsg.text = `调整失败：${err.message}`;
+    showToast(`调整失败：${err.message}`);
+  }
+}
+
+// 导出最终内容：把已确认的正文渲染为文件，完成后自动下载
+async function handleContentExport() {
+  const taskId = currentTaskId.value;
+  if (!taskId || !contentReady.value || isGenerating.value) return;
+
+  isGenerating.value = true;
+  exporting.value = true;
+  currentTaskProgress.value = 0;
+  currentTaskStage.value = "正在排版导出…";
+
+  try {
+    await exportCoursewareTask(taskId);
     subscribeProgress(taskId, {
       onProgress: (data) => {
         currentTaskProgress.value = data.progress;
         currentTaskStage.value = data.stage;
       },
-      onComplete: (data) => {
+      onDone: (data) => {
         isGenerating.value = false;
-        generatedFilename.value = data.filename || "";
-        list.push({
-          id: nextReviseId(),
-          role: "assistant",
-          text: "已按你的意见更新，可直接下载新文件。",
-          filename: data.filename || "",
-        });
-        showToast(`已更新：${data.filename}`);
-        history.value = getHistory();
-        stats.value = getStats();
+        exporting.value = false;
+        if (data.status === "completed" && data.filename) {
+          generatedFilename.value = data.filename;
+          downloadFile(taskId, data.filename);
+          showToast(`已导出：${data.filename}`);
+        } else {
+          showToast("导出未完成，请重试");
+        }
       },
       onError: (err) => {
         isGenerating.value = false;
-        list.push({
-          id: nextReviseId(),
-          role: "assistant",
-          text: `调整失败：${err.message}`,
-        });
-        showToast(`调整失败：${err.message}`);
+        exporting.value = false;
+        showToast(`导出失败：${err.message}`);
       },
     });
   } catch (err) {
     isGenerating.value = false;
-    list.push({
-      id: nextReviseId(),
-      role: "assistant",
-      text: `调整失败：${err.message}`,
-    });
-    showToast(`调整失败：${err.message}`);
+    exporting.value = false;
+    showToast(`导出失败：${err.message}`);
   }
 }
 
@@ -195,8 +237,8 @@ async function fetchSparkTemplates() {
   }
 }
 
-// 当前面板的 AI 协作引擎：课件 = DeepSeek 出大纲 + 讯飞智文 排版出稿；
-// 教案 / 练习 / 试卷为纯文本产出，仅 DeepSeek。
+// 各面板最终产出内容的 AI 引擎（仅用于右侧对话区的 AI 头像，不在界面标注"生成引擎"）：
+// 课件 = DeepSeek 出大纲 + 讯飞智文 排版出稿，头像取最终出稿方；教案/练习/试卷 = DeepSeek。
 const currentPipeline = computed(() =>
   activePanel.value === "ppt" ? ["deepseek", "zhiwen"] : ["deepseek"],
 );
@@ -2571,8 +2613,10 @@ const typeToApiType = {
 async function callApiGenerate(apiType, params) {
   const panel = panelByApiType[apiType] || "ppt";
   isGenerating.value = true;
+  exporting.value = false;
   currentTaskProgress.value = 0;
   currentTaskStage.value = "启动中…";
+  contentReady.value = false;
   generatedFilename.value = "";
   reviseMessages.value[panel] = [];
 
@@ -2583,20 +2627,17 @@ async function callApiGenerate(apiType, params) {
     });
     currentTaskId.value = taskId;
 
-    // 订阅 SSE 进度
+    // 新建流式正文消息，随后续 SSE delta 增量填充
+    const streamMsg = startStreamMessage(panel);
+
+    // 订阅 SSE：正文增量 + 进度
     subscribeProgress(taskId, {
-      onProgress: (data) => {
-        currentTaskProgress.value = data.progress;
-        currentTaskStage.value = data.stage;
-        if (data.status === "completed") {
-          generatedFilename.value = data.filename || "";
-        }
-      },
-      onComplete: (data) => {
+      ...subscribeStream(streamMsg),
+      onDone: () => {
         isGenerating.value = false;
-        generatedFilename.value = data.filename || "";
-        pushInitialMessage(panel, data.filename);
-        showToast(`生成完成：${data.filename}`);
+        streamMsg.streaming = false;
+        contentReady.value = true;
+        showToast("内容已生成，可在右侧查看并修改");
 
         // 将新记录写入历史列表（localStorage）
         // API type 映射: quiz → interactive, exam → exam
@@ -2605,24 +2646,13 @@ async function callApiGenerate(apiType, params) {
         addRecord({
           taskId,
           type: historyType,
-          title: data.filename || "新生成的课件",
+          title: params.topic || "新生成的内容",
           subject: params.subject || "未分类",
           status: "completed",
         });
 
         history.value = getHistory();
         stats.value = getStats();
-      },
-      onError: (err) => {
-        isGenerating.value = false;
-        reviseMessages.value[panel] = [
-          {
-            id: nextReviseId(),
-            role: "assistant",
-            text: `生成失败：${err.message}`,
-          },
-        ];
-        showToast(`生成失败：${err.message}`);
       },
     });
   } catch (err) {
@@ -4275,13 +4305,14 @@ onUnmounted(() => {
               :messages="currentReviseMessages"
               :ready="reviseReady"
               :generating="isGenerating"
+              :exporting="exporting"
               :progress="currentTaskProgress"
               :stage="currentTaskStage"
-              :task-id="currentTaskId"
               :filename="generatedFilename"
               :placeholder="currentRevisePlaceholder"
               :pipeline="currentPipeline"
               @send="handleReviseSend"
+              @export="handleContentExport"
             >
               <template #footer-tools>
                 <TemplateMarket
@@ -4622,13 +4653,14 @@ onUnmounted(() => {
               :messages="currentReviseMessages"
               :ready="reviseReady"
               :generating="isGenerating"
+              :exporting="exporting"
               :progress="currentTaskProgress"
               :stage="currentTaskStage"
-              :task-id="currentTaskId"
               :filename="generatedFilename"
               :placeholder="currentRevisePlaceholder"
               :pipeline="currentPipeline"
               @send="handleReviseSend"
+              @export="handleContentExport"
             />
           </div>
         </section>
@@ -4832,13 +4864,14 @@ onUnmounted(() => {
               :messages="currentReviseMessages"
               :ready="reviseReady"
               :generating="isGenerating"
+              :exporting="exporting"
               :progress="currentTaskProgress"
               :stage="currentTaskStage"
-              :task-id="currentTaskId"
               :filename="generatedFilename"
               :placeholder="currentRevisePlaceholder"
               :pipeline="currentPipeline"
               @send="handleReviseSend"
+              @export="handleContentExport"
             />
           </div>
         </section>
@@ -5115,13 +5148,14 @@ onUnmounted(() => {
               :messages="currentReviseMessages"
               :ready="reviseReady"
               :generating="isGenerating"
+              :exporting="exporting"
               :progress="currentTaskProgress"
               :stage="currentTaskStage"
-              :task-id="currentTaskId"
               :filename="generatedFilename"
               :placeholder="currentRevisePlaceholder"
               :pipeline="currentPipeline"
               @send="handleReviseSend"
+              @export="handleContentExport"
             />
           </div>
         </section>

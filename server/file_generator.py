@@ -7,6 +7,7 @@
 import os
 import re
 import json
+import html
 import shutil
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
@@ -1221,6 +1222,328 @@ def generate_exam_html(content: dict) -> tuple:
         f.write(html)
     print(f"[HTML Exam] 已生成: {filepath}")
     return filepath, filename
+
+
+# ════════════════════════════════════════════════════════════════
+# Markdown 渲染 —— 右侧面板所见即导出所得
+# ════════════════════════════════════════════════════════════════
+
+def _strip_md_inline(text: str) -> str:
+    """去除行内 Markdown 标记（加粗/斜体/行内代码），用于纯文本渲染。"""
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text or "")
+    text = re.sub(r'(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)', r'\1', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    return text.strip()
+
+
+def _parse_markdown_blocks(md: str) -> list:
+    """把 Markdown 解析为渲染友好的块列表。
+
+    支持：一级~六级标题、无序列表(-/*/+)、有序列表(1./1、)、普通段落。
+    """
+    blocks = []
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i].strip()
+        i += 1
+        if not line:
+            continue
+        heading = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if heading:
+            blocks.append((f"h{len(heading.group(1))}", heading.group(2).strip()))
+            continue
+        if re.match(r'^[-*+]\s+', line):
+            items = [re.sub(r'^[-*+]\s+', '', line).strip()]
+            while i < n and re.match(r'^\s*[-*+]\s+', lines[i]):
+                items.append(re.sub(r'^\s*[-*+]\s+', '', lines[i]).strip())
+                i += 1
+            blocks.append(("ul", items))
+            continue
+        num = re.match(r'^(\d+)[.、)]\s+(.*)$', line)
+        if num:
+            items = [num.group(2).strip()]
+            while i < n:
+                nxt = re.match(r'^\s*(\d+)[.、)]\s+(.*)$', lines[i])
+                if not nxt:
+                    break
+                items.append(nxt.group(2).strip())
+                i += 1
+            blocks.append(("ol", items))
+            continue
+        blocks.append(("p", line))
+    return blocks
+
+
+def _first_heading(md: str, fallback: str) -> str:
+    """取 Markdown 首个一级标题作为标题；没有则用 fallback。"""
+    for line in (md or "").replace("\r\n", "\n").split("\n"):
+        m = re.match(r'^#\s+(.*)$', line.strip())
+        if m:
+            return _strip_md_inline(m.group(1))
+    return fallback
+
+
+def _strip_first_heading_line(md: str) -> str:
+    """去掉正文中首个一级标题行（标题已在页头单独渲染）。"""
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    out, removed = [], False
+    for line in lines:
+        if not removed and re.match(r'^#\s+', line.strip()):
+            removed = True
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def generate_docx_from_markdown(md: str, meta: dict) -> tuple:
+    """把确认后的 Markdown 教案渲染为 DOCX（所见即所得）。"""
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Cm(2.4)
+    section.bottom_margin = Cm(2.4)
+    section.left_margin = Cm(2.6)
+    section.right_margin = Cm(2.6)
+
+    normal = doc.styles['Normal']
+    normal.font.name = 'Microsoft YaHei'
+    normal.font.size = DocxPt(11)
+    normal.paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.space_after = DocxPt(4)
+    normal.element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
+
+    # ① 标题区
+    title_text = _first_heading(md, meta.get("topic") or "教案")
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_para.paragraph_format.space_before = DocxPt(12)
+    title_para.paragraph_format.space_after = DocxPt(6)
+    _set_cn_font(title_para.add_run(title_text), size=26, bold=True,
+                 color=_DOC_PRIMARY, name="黑体")
+
+    subtitle = " · ".join(x for x in [meta.get("subject", ""), meta.get("grade", "")] if x)
+    if subtitle:
+        sub_para = doc.add_paragraph()
+        sub_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub_para.paragraph_format.space_after = DocxPt(6)
+        _set_cn_font(sub_para.add_run(subtitle), size=13, color=_DOC_MUTED)
+
+    div_para = doc.add_paragraph()
+    div_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    div_para.paragraph_format.space_after = DocxPt(12)
+    _set_cn_font(div_para.add_run("─" * 46), size=10, color="CBD5E1")
+
+    # ② 课程基本信息表（取自任务参数，保证准确）
+    _add_info_table(doc, [
+        ("学科", meta.get("subject", "")),
+        ("年级", meta.get("grade", "")),
+        ("课时", meta.get("duration", "1课时")),
+        ("教学风格", meta.get("style", "—")),
+    ])
+    doc.add_paragraph(style='Normal')
+
+    # ③ 正文：按 Markdown 层级渲染（一级栏目→深蓝色块标题，环节→◆标题）
+    for kind, payload in _parse_markdown_blocks(md):
+        if kind == "h1":
+            if payload == title_text:
+                continue  # 标题已在页头渲染
+            _add_heading(doc, _strip_md_inline(payload), 1)
+        elif kind == "h2":
+            _add_heading(doc, _strip_md_inline(payload), 1)
+        elif kind in ("h3", "h4"):
+            _add_heading(doc, _strip_md_inline(payload), 2)
+        elif kind in ("h5", "h6"):
+            _add_heading(doc, _strip_md_inline(payload), 3)
+        elif kind == "ul":
+            for item in payload:
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(1.0)
+                p.paragraph_format.space_after = DocxPt(3)
+                _set_cn_font(p.add_run("▸ "), size=11, color="94A3B8")
+                _set_cn_font(p.add_run(_strip_md_inline(item)), size=11, color=_DOC_BODY)
+        elif kind == "ol":
+            for idx, item in enumerate(payload, 1):
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(1.0)
+                p.paragraph_format.space_after = DocxPt(3)
+                _set_cn_font(p.add_run(f"{idx}. "), size=11, bold=True, color=_DOC_ACCENT)
+                _set_cn_font(p.add_run(_strip_md_inline(item)), size=11, color=_DOC_BODY)
+        else:
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Cm(0.5)
+            p.paragraph_format.space_after = DocxPt(4)
+            _set_cn_font(p.add_run(_strip_md_inline(payload)), size=11, color=_DOC_BODY)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title_text)
+    filename = f"{safe_title}.docx"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    doc.save(filepath)
+    print(f"[DOC] 已生成: {filepath}")
+    return filepath, filename
+
+
+# HTML 文档外壳（练习题 / 试卷共用）：浅色纸张风，便于阅读与打印
+_HTML_MD_CSS = """
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 0 auto; padding: 48px 28px 64px;
+    color: #1E293B; background: #F7F5F2; line-height: 1.8;
+  }
+  .header { text-align: center; margin-bottom: 36px; padding-bottom: 24px;
+    border-bottom: 2px solid #E2E8F0; }
+  .header h1 { font-size: 1.9rem; font-weight: 800; color: #1A365D;
+    letter-spacing: -0.02em; margin-bottom: 10px; }
+  .header .meta { display: flex; flex-wrap: wrap; align-items: center;
+    justify-content: center; gap: 10px 18px; color: #64748B; font-size: 0.9rem; }
+  .header .meta span { padding: 3px 12px; background: #F1F5F9; border-radius: 20px; }
+  .doc { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px;
+    padding: 32px 34px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .doc h1 { font-size: 1.5rem; color: #1A365D; margin: 30px 0 14px;
+    padding-bottom: 8px; border-bottom: 2px solid #EAF2FB; }
+  .doc h2 { font-size: 1.25rem; color: #1A365D; margin: 28px 0 12px;
+    padding: 8px 12px; background: #EAF2FB; border-left: 4px solid #1A365D;
+    border-radius: 4px; }
+  .doc h3 { font-size: 1.08rem; color: #2B6CB0; margin: 20px 0 10px; }
+  .doc h4, .doc h5, .doc h6 { font-size: 1rem; color: #0E7490; margin: 16px 0 8px; }
+  .doc p { margin: 8px 0; color: #334155; }
+  .doc ul, .doc ol { margin: 8px 0 8px 24px; color: #334155; }
+  .doc li { margin: 5px 0; }
+  strong { color: #1A365D; }
+  .footer { text-align: center; margin-top: 40px; padding-top: 20px;
+    border-top: 1px solid #E2E8F0; color: #94A3B8; font-size: 0.8rem; }
+  @media print { body { background: #fff; padding: 0; } .doc { border: none; box-shadow: none; } }
+"""
+
+
+def _html_inline(text: str) -> str:
+    """转义后保留加粗标记。"""
+    text = html.escape(_strip_md_inline(text))
+    return text
+
+
+def _markdown_to_html(md: str) -> str:
+    """Markdown 块 → HTML（标题 / 列表 / 段落）。"""
+    parts = []
+    for kind, payload in _parse_markdown_blocks(md):
+        if kind.startswith("h"):
+            lvl = kind[1]
+            parts.append(f"<h{lvl}>{_html_inline(payload)}</h{lvl}>")
+        elif kind == "ul":
+            items = "".join(f"<li>{_html_inline(x)}</li>" for x in payload)
+            parts.append(f"<ul>{items}</ul>")
+        elif kind == "ol":
+            items = "".join(f"<li>{_html_inline(x)}</li>" for x in payload)
+            parts.append(f"<ol>{items}</ol>")
+        else:
+            parts.append(f"<p>{_html_inline(payload)}</p>")
+    return "\n".join(parts)
+
+
+def _render_markdown_html(md: str, meta: dict, kind: str) -> tuple:
+    """通用：Markdown → 独立 HTML 文件（练习题 / 试卷）。"""
+    default_title = "试卷" if kind == "exam" else "练习题"
+    title = _first_heading(md, meta.get("topic") or default_title)
+    body = _markdown_to_html(_strip_first_heading_line(md))
+
+    bits = []
+    if meta.get("subject"):
+        bits.append(f"学科：{meta['subject']}")
+    if meta.get("grade"):
+        bits.append(f"年级：{meta['grade']}")
+    if kind == "exam" and meta.get("totalScore"):
+        bits.append(f"总分：{meta['totalScore']} 分")
+    if meta.get("duration"):
+        bits.append(f"时长：{meta['duration']}")
+    meta_html = "".join(f"<span>{html.escape(b)}</span>" for b in bits)
+
+    footer = ("知启灵枢 · AI 智能组卷 · 仅供教学参考" if kind == "exam"
+              else "知启灵枢 · AI 智能出题 · 仅供教学参考")
+
+    doc = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html.escape(title)}</title>
+<style>{_HTML_MD_CSS}</style>
+</head>
+<body>
+<div class="header">
+  <h1>{html.escape(title)}</h1>
+  <div class="meta">{meta_html}</div>
+</div>
+
+<div class="doc">
+{body}
+</div>
+
+<div class="footer"><p>{footer}</p></div>
+</body>
+</html>"""
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)
+    filename = f"{safe_title}.html"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(doc)
+    print(f"[HTML] 已生成: {filepath}")
+    return filepath, filename
+
+
+def generate_quiz_html_from_markdown(md: str, meta: dict) -> tuple:
+    """把确认后的 Markdown 练习题渲染为 HTML。"""
+    return _render_markdown_html(md, meta, "quiz")
+
+
+def generate_exam_html_from_markdown(md: str, meta: dict) -> tuple:
+    """把确认后的 Markdown 试卷渲染为 HTML。"""
+    return _render_markdown_html(md, meta, "exam")
+
+
+def parse_ppt_outline(md: str, meta: dict = None) -> dict:
+    """把 Markdown 课件大纲解析为 PPT 渲染器所需的 content 结构。
+
+    规则：# → 封面标题；## → 章节分隔页；### → 内容页；- → 内容页要点。
+    """
+    meta = meta or {}
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    title = ""
+    slides = []
+    current = None
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        h = re.match(r'^(#{1,3})\s+(.*)$', line)
+        if h:
+            level, text = len(h.group(1)), _strip_md_inline(h.group(2))
+            if level == 1:
+                title = title or text
+            elif level == 2:
+                slides.append({"type": "section", "title": text, "content": []})
+                current = None
+            else:
+                current = {"type": "content", "title": text, "content": []}
+                slides.append(current)
+            continue
+        bullet = re.match(r'^[-*+]\s+(.*)$', line)
+        item = _strip_md_inline(bullet.group(1) if bullet else line)
+        if current is None:
+            current = {"type": "content", "title": "内容", "content": []}
+            slides.append(current)
+        current["content"].append(item)
+
+    title = title or meta.get("topic") or "教学课件"
+    cover_meta = " · ".join(x for x in [meta.get("subject", ""), meta.get("grade", "")] if x)
+    slides.insert(0, {
+        "type": "title",
+        "title": title,
+        "content": [cover_meta] if cover_meta else [],
+    })
+    return {"title": title, "subtitle": "", "slides": slides}
 
 
 # ════════════════════════════════════════════════════════════════

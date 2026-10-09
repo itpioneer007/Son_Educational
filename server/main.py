@@ -26,12 +26,13 @@ from pydantic import BaseModel
 
 from config import OUTPUT_DIR, DATA_DIR, TASKS_FILE, HOST, PORT
 from ai_service import (
-    generate_ppt_content, generate_doc_content, generate_quiz_content, generate_exam_content,
+    stream_ppt_content, stream_doc_content, stream_quiz_content, stream_exam_content,
     chat_with_qwen, chat_with_qwen_stream,
 )
 from file_generator import (
     generate_pptx, generate_pptx_from_template,
-    generate_docx, generate_quiz_html, generate_exam_html,
+    generate_docx_from_markdown, generate_quiz_html_from_markdown,
+    generate_exam_html_from_markdown, parse_ppt_outline,
     get_template_list, pick_template,
 )
 from skill_ppt import (
@@ -55,6 +56,10 @@ app.add_middleware(
 # 任务持久化到本地 JSON 文件，服务重启后记录不丢失，供管理后台统计
 _tasks: dict[str, dict] = {}
 _tasks_lock = asyncio.Lock()
+
+# 内容流式缓冲区：task_id → 已生成的 Markdown 文本。
+# 只存在内存里（不落盘、不放进 _tasks），SSE 按游标增量推送给前端即时渲染。
+_stream_text: dict[str, str] = {}
 
 
 def _load_tasks():
@@ -90,9 +95,10 @@ def _new_task(task_type: str, subject: str = "", topic: str = "", grade: str = "
         "subject": subject,     # 学科
         "topic": topic,         # 课题
         "grade": grade,         # 年级
-        "status": "queued",     # queued → processing → completed / failed
+        "status": "queued",     # queued → processing → ready（内容就绪，待导出）→ exporting → completed / failed
         "progress": 0,
         "stage": "等待处理",
+        "content_md": None,     # AI 流式生成的 Markdown 正文（用户在右侧确认后据此导出）
         "filename": None,
         "filepath": None,
         "error": None,
@@ -214,6 +220,7 @@ async def refine_courseware(task_id: str, req: RefineRequest):
     params["revision"] = "；".join(revisions)
 
     # 复用同一 task_id：下载地址不变，完成即覆盖为新版文件
+    _stream_text[task_id] = ""
     _update_task(
         task_id,
         params=params,
@@ -221,12 +228,37 @@ async def refine_courseware(task_id: str, req: RefineRequest):
         status="processing",
         progress=0,
         stage="正在按修改意见调整…",
+        content_md=None,
         filename=None,
         filepath=None,
         error=None,
     )
     asyncio.create_task(_run_generation(task_id, params))
     return {"taskId": task_id, "status": "processing", "revisions": revisions}
+
+
+# ── API: 导出最终内容 ─────────────────────────────────────────
+# 内容生成（流式）与文件导出分离：用户先在右侧确认内容，满意后点击导出按钮，
+# 后端才把 content_md 渲染成 docx / html / pptx 并置为可下载。
+
+@app.post("/api/courseware/{task_id}/export")
+async def export_courseware(task_id: str):
+    task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.get("status") in ("processing", "exporting"):
+        raise HTTPException(status_code=409, detail="当前正在处理中，请稍候")
+    if not task.get("content_md"):
+        raise HTTPException(status_code=400, detail="内容尚未生成，无法导出")
+
+    # 清空流式缓冲，避免导出时 SSE 重复推送正文
+    _stream_text[task_id] = ""
+    _update_task(
+        task_id, status="exporting", progress=0,
+        stage="正在排版导出…", filename=None, filepath=None, error=None,
+    )
+    asyncio.create_task(_run_export(task_id, dict(task.get("params") or {})))
+    return {"taskId": task_id, "status": "exporting"}
 
 
 def _render_local_ppt(content: dict, template_id: str):
@@ -237,28 +269,24 @@ def _render_local_ppt(content: dict, template_id: str):
 
 
 async def _run_generation(task_id: str, params: dict):
-    """后台执行生成流程并逐步推送进度"""
+    """后台流式生成正文（Markdown）：增量写入 _stream_text，完成后置为 ready 待导出。"""
     revision = params.get("revision", "")
     try:
-        _update_task(task_id, status="processing", progress=0, stage="正在整理内容结构…")
-        await asyncio.sleep(0.3)
+        _update_task(task_id, status="processing", progress=5, stage="正在编写内容…")
+        _stream_text[task_id] = ""
 
-        # 1. 生成内容
-        _update_task(task_id, progress=25, stage="正在编写内容…")
         if params["type"] == "ppt":
-            content = await generate_ppt_content(
+            stream = stream_ppt_content(
                 params["subject"], params["topic"],
-                params["grade"], params["style"], params["outline"],
-                revision,
+                params["grade"], params["style"], params["outline"], revision,
             )
         elif params["type"] == "doc":
-            content = await generate_doc_content(
+            stream = stream_doc_content(
                 params["subject"], params["topic"],
-                params["grade"], params["requirements"],
-                revision,
+                params["grade"], params["requirements"], revision,
             )
         elif params["type"] == "exam":
-            content = await generate_exam_content(
+            stream = stream_exam_content(
                 params["subject"], params["topic"],
                 grade=params["grade"], difficulty=params.get("difficulty", "中等"),
                 total_score=int(params.get("totalScore", 100)),
@@ -273,7 +301,7 @@ async def _run_generation(task_id: str, params: dict):
                 revision=revision,
             )
         else:
-            content = await generate_quiz_content(
+            stream = stream_quiz_content(
                 params["subject"], params["topic"],
                 params["grade"], params["difficulty"],
                 scenario=params.get("scenario", ""),
@@ -285,22 +313,51 @@ async def _run_generation(task_id: str, params: dict):
                 revision=revision,
             )
 
-        _update_task(task_id, progress=60, stage="正在排版导出…")
-        await asyncio.sleep(0.2)
+        # 边生成边推进度（85% 封顶，剩余留给导出）；仅改内存、不逐次落盘
+        async for delta in stream:
+            _stream_text[task_id] = _stream_text.get(task_id, "") + delta
+            task = _tasks.get(task_id)
+            if task and task.get("progress", 5) < 85:
+                task["progress"] = task["progress"] + 1
 
-        # 2. 渲染文件
-        content["subject"] = params.get("subject", "")
-        content["style"] = params.get("style", "")
-        content["grade"] = params.get("grade", "")
-        content["duration"] = params.get("duration", "45分钟")
-        if params["type"] == "ppt":
-            # 两段式流程：DeepSeek 已生成大纲(content)，此处按引擎选择出稿方式
+        _update_task(
+            task_id,
+            content_md=_stream_text.get(task_id, ""),
+            progress=100,
+            status="ready",
+            stage="内容已生成，可提出修改或导出",
+        )
+    except Exception as e:
+        _update_task(task_id, status="failed", error=str(e),
+                     stage=f"生成失败：{str(e)[:80]}")
+
+
+async def _run_export(task_id: str, params: dict):
+    """把用户确认后的 Markdown 内容渲染为最终文件（docx / html / pptx）。"""
+    task = _tasks.get(task_id, {})
+    md = task.get("content_md") or ""
+    meta = {
+        "subject": params.get("subject", ""),
+        "grade": params.get("grade", ""),
+        "style": params.get("style", ""),
+        "duration": params.get("duration", "45分钟"),
+        "topic": params.get("topic", ""),
+        "totalScore": params.get("totalScore", ""),
+    }
+    try:
+        _update_task(task_id, status="exporting", progress=20, stage="正在排版…")
+        await asyncio.sleep(0.1)
+
+        if params.get("type") == "ppt":
+            content = parse_ppt_outline(md, meta)
+            content["subject"] = meta["subject"]
+            content["style"] = meta["style"]
             template_id = params.get("template", "") or ""
             engine = (params.get("engine") or "spark").lower()
             filepath, filename = None, None
 
             if engine == "spark":
-                _update_task(task_id, progress=70, stage="正在排版并自动配图…")
+                _update_task(task_id, progress=50, stage="正在排版并自动配图…")
                 # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
                 spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
                 if spark_result:
@@ -310,20 +367,31 @@ async def _run_generation(task_id: str, params: dict):
                     _update_task(task_id, stage="自动排版不可用，改用本地模版…")
 
             if not filepath:
-                filepath, filename = _render_local_ppt(content, template_id)
-        elif params["type"] == "doc":
-            filepath, filename = generate_docx(content)
-        elif params["type"] == "exam":
-            filepath, filename = generate_exam_html(content)
+                filepath, filename = await asyncio.to_thread(
+                    _render_local_ppt, content, template_id
+                )
+        elif params.get("type") == "doc":
+            _update_task(task_id, progress=60, stage="正在生成 Word 教案…")
+            filepath, filename = await asyncio.to_thread(
+                generate_docx_from_markdown, md, meta
+            )
+        elif params.get("type") == "exam":
+            _update_task(task_id, progress=60, stage="正在生成试卷文件…")
+            filepath, filename = await asyncio.to_thread(
+                generate_exam_html_from_markdown, md, meta
+            )
         else:
-            filepath, filename = generate_quiz_html(content)
+            _update_task(task_id, progress=60, stage="正在生成练习文件…")
+            filepath, filename = await asyncio.to_thread(
+                generate_quiz_html_from_markdown, md, meta
+            )
 
-        _update_task(task_id, progress=100, stage="生成完成",
-                      status="completed", filename=filename, filepath=filepath)
+        _update_task(task_id, progress=100, stage="导出完成",
+                     status="completed", filename=filename, filepath=filepath)
 
     except Exception as e:
         _update_task(task_id, status="failed", error=str(e),
-                      stage=f"生成失败：{str(e)[:80]}")
+                     stage=f"导出失败：{str(e)[:80]}")
 
 
 # ── API: 历史记录 ─────────────────────────────────────────────
@@ -364,18 +432,28 @@ def get_task(task_id: str):
 
 @app.get("/api/courseware/{task_id}/stream")
 async def stream_progress(task_id: str):
-    """Server-Sent Events 实时推送生成进度"""
+    """Server-Sent Events：实时推送生成进度 + 正文增量（delta）"""
     async def event_generator():
         last_progress = -1
+        cursor = 0  # 已推送的正文长度
         while True:
             task = _tasks.get(task_id)
             if not task:
                 yield f"event: error\ndata: {json.dumps({'message': '任务不存在'})}\n\n"
                 break
 
-            if task["progress"] != last_progress or task["status"] in ("completed", "failed"):
+            # 1. 先推送正文增量，保证「ready」前的内容不丢
+            buf = _stream_text.get(task_id, "")
+            if len(buf) > cursor:
+                chunk = buf[cursor:]
+                cursor = len(buf)
+                yield f"event: delta\ndata: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+
+            status = task["status"]
+            terminal = status in ("ready", "completed", "failed")
+            if task["progress"] != last_progress or terminal:
                 data = json.dumps({
-                    "status": task["status"],
+                    "status": status,
                     "progress": task["progress"],
                     "stage": task["stage"],
                     "filename": task.get("filename"),
@@ -384,10 +462,10 @@ async def stream_progress(task_id: str):
                 yield f"event: progress\ndata: {data}\n\n"
                 last_progress = task["progress"]
 
-            if task["status"] in ("completed", "failed"):
+            if terminal:
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.15)
 
     return StreamingResponse(
         event_generator(),
@@ -491,9 +569,9 @@ def list_templates():
 async def list_spark_templates():
     """返回讯飞智文模板列表。
 
-    上游模板接口不支持翻页 / 筛选（任何参数都返回同一批），因此一次性返回
-    全部可用模板，total 为去重后的真实条数。失败（未配置凭据 / 网络异常）
-    时返回空列表 + error，不抛 500，以便前端优雅降级。
+    上游模板接口的分页参数必须放在 JSON Body 里，因此这里分页抓取多页并去重，
+    一次性返回全部可用模板（约百个），total 为去重后的真实条数。失败（未配置凭据 /
+    网络异常）时返回空列表 + error，不抛 500，以便前端优雅降级。
     """
     try:
         data = await asyncio.to_thread(get_spark_templates, "not_free")
@@ -521,6 +599,7 @@ def delete_task(task_id: str):
     task = _tasks.pop(task_id, None)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    _stream_text.pop(task_id, None)
     # 清理文件
     fp = task.get("filepath")
     if fp and os.path.exists(fp):

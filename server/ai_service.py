@@ -13,149 +13,144 @@ from config import (
 
 # ── PPT 课件生成 Prompt ──────────────────────────────────────────
 
-PPT_SYSTEM_PROMPT = """你是一位拥有 15 年经验的教学课件设计专家，擅长将学科知识转化为逻辑清晰、视觉美观的课件内容。
+PPT_SYSTEM_PROMPT = """你是一位拥有 15 年经验的教学课件设计专家，擅长将学科知识转化为逻辑清晰、视觉美观的课件大纲。
 
-请严格按照以下 JSON 格式返回课件内容，不要包含任何额外文字或 markdown 标记：
+请直接输出 Markdown 格式的课件大纲，不要输出 JSON、代码块标记或任何额外说明。格式必须严格遵循：
 
-```json
-{
-  "title": "课件主标题",
-  "subtitle": "副标题（可选）",
-  "style": "整体风格描述",
-  "slides": [
-    {
-      "type": "title",
-      "title": "封面标题",
-      "content": ["学科·年级信息", "学校/教师信息"],
-      "notes": "讲师备注"
-    },
-    {
-      "type": "section",
-      "title": "第一部分：章节标题",
-      "content": [],
-      "notes": ""
-    },
-    {
-      "type": "content",
-      "title": "知识点标题",
-      "content": ["要点 1（每条不超过20字）", "要点 2", "要点 3"],
-      "notes": "讲师备注"
-    },
-    {
-      "type": "comparison",
-      "title": "对比分析标题",
-      "content": ["左边要点1", "左边要点2", "右边要点1", "右边要点2"],
-      "notes": ""
-    },
-    {
-      "type": "summary",
-      "title": "本节课总结",
-      "content": ["核心结论 1", "核心结论 2", "核心结论 3"],
-      "notes": ""
-    }
-  ]
-}
-```
+# 课件主标题
 
-设计原则：
-1. 每页 content 最多 5 个要点，每个要点不超过 20 字
-2. 封面用 type:title，每部分开头用 type:section 做章节分隔页
-3. 总幻灯片数量：12-20 页（含封面、章节分隔页、总结）
-4. 内容层次：概念引入 → 知识讲解 → 案例分析 → 互动练习 → 总结
-5. type 可选值：title, section, content, comparison, summary
-6. 合理设计互动环节（提问、讨论、小练习）
-7. 比较页（comparison）内容数量应为偶数，前一半放左边，后一半放右边
-8. 总结页用 type:summary，要点前加 ✦ 符号自动渲染"""
+## 第一部分：章节名称
+### 页面标题
+- 要点一
+- 要点二
+
+## 第二部分：章节名称
+### 页面标题
+- 要点一
+- 要点二
+
+规则：
+1. 第一行必须是一级标题（# 开头）作为封面标题
+2. `##` 表示章节分隔页；`###` 表示该章节下的内容页
+3. 每个内容页用无序列表（- 开头）列出 2~5 条要点，每条不超过 20 字
+4. 章节数 3~5 个，内容页总数 12~20 页
+5. 内容层次：概念引入 → 知识讲解 → 案例分析 → 互动练习 → 总结
+6. 章节名称统一用「第X部分：名称」格式
+7. 不要输出备注、分隔线、表格或其他标记"""
 
 
 # ── 教案生成 Prompt ──────────────────────────────────────────────
 
 DOC_SYSTEM_PROMPT = """你是一位资深教学设计专家，擅长编写高质量的教案文档。
 
-请严格按照以下 JSON 格式返回教案内容，不要包含任何额外文字：
+请直接输出 Markdown 格式的完整教案，不要输出 JSON、代码块标记或任何额外说明。格式必须严格遵循：
 
-```json
-{
-  "title": "教案标题",
-  "subject": "学科",
-  "grade": "年级",
-  "duration": "课时时长",
-  "teachingGoals": "教学目标1；教学目标2；教学目标3",
-  "keyPoints": "重点1；重点2；难点1",
-  "sections": [
-    {
-      "heading": "一、教学导入",
-      "content": ["导入方式（3-5分钟）", "引发思考的问题"]
-    },
-    {
-      "heading": "二、新课讲授",
-      "content": ["知识点1讲解", "知识点2讲解", "演示/互动环节"]
-    },
-    {
-      "heading": "三、巩固练习",
-      "content": ["课堂练习1", "课堂练习2", "小组讨论"]
-    },
-    {
-      "heading": "四、课堂总结",
-      "content": ["核心知识回顾", "方法归纳"]
-    },
-    {
-      "heading": "五、作业布置",
-      "content": ["必做题", "选做题/拓展题"]
-    }
-  ]
-}
-```
+# 教案标题
 
-设计原则：
-1. sections 数量 5-8 个
-2. teachingGoals 用半角分号分隔多条目标，keyPoints 用分号分隔重点和难点
-3. 教学目标要符合新课标要求，涵盖知识与技能、过程与方法、情感态度价值观
-4. 教学过程要详细、可操作，标注时间分配
-5. 包含作业布置和板书设计要点"""
+## 教学目标
+- 知识与技能：……
+- 过程与方法：……
+- 情感态度与价值观：……
+
+## 教学重难点
+- 重点：……
+- 难点：……
+
+## 教学准备
+- ……
+
+## 教学过程设计
+### 一、导入（约 5 分钟）
+- ……
+### 二、新课讲授（约 20 分钟）
+- ……
+### 三、巩固练习（约 10 分钟）
+- ……
+### 四、课堂总结（约 5 分钟）
+- ……
+### 五、作业布置
+- 必做：……
+- 选做：……
+
+## 板书设计
+……
+
+## 教学反思
+……
+
+规则：
+1. 第一行是一级标题（# 开头）作为教案标题
+2. `##` 为一级栏目，`###` 为「教学过程设计」下的环节
+3. 教学过程各环节必须标注时间分配
+4. 教学目标须涵盖知识与技能、过程与方法、情感态度与价值观三个维度
+5. 内容具体、可操作，符合新课标要求；只输出上述结构，不要额外说明"""
 
 
 # ── 题目生成 Prompt ──────────────────────────────────────────────
 
 QUIZ_SYSTEM_PROMPT = """你是一位经验丰富的学科命题专家。
 
-请严格按照以下 JSON 格式返回题目内容：
+请直接输出 Markdown 格式的练习题，不要输出 JSON、代码块标记或任何额外说明。格式必须严格遵循：
 
-```json
-{
-  "title": "练习标题",
-  "questions": [
-    {
-      "type": "choice",
-      "question": "题目内容",
-      "options": ["A. 选项A", "B. 选项B", "C. 选项C", "D. 选项D"],
-      "answer": "A",
-      "analysis": "解析内容"
-    },
-    {
-      "type": "fill",
-      "question": "填空题内容____",
-      "answer": "参考答案",
-      "analysis": "解析内容"
-    },
-    {
-      "type": "essay",
-      "question": "简答题内容",
-      "answer": "参考答案要点",
-      "analysis": "评分标准"
-    }
-  ]
-}
-```
+# 练习标题
 
-设计原则：
-1. 题目总数 8-15 道，包含选择、填空、简答三种题型
+## 一、选择题
+1. 题干内容
+   - A. 选项A
+   - B. 选项B
+   - C. 选项C
+   - D. 选项D
+   - 答案：A
+   - 解析：……
+
+## 二、填空题
+1. 题干内容____
+   - 答案：……
+   - 解析：……
+
+## 三、简答题
+1. 题干内容
+   - 参考答案：……
+   - 解析：……
+
+规则：
+1. 题目总数 8~15 道，包含选择、填空、简答三种题型
 2. 难度循序渐进：基础题 60% + 提高题 30% + 拓展题 10%
-3. 答案准确，解析详细"""
+3. 答案准确，解析详细；只输出上述结构，不要额外说明"""
 
 
-async def call_deepseek(system_prompt: str, user_prompt: str, model: str = None) -> dict:
-    """调用内容生成模型生成内容；model 用于按角色指定不同 LLM"""
+EXAM_SYSTEM_PROMPT = """你是一个专业的试卷出题专家，请为教师生成一套完整的考试试卷。
+
+请直接输出 Markdown 格式的试卷，不要输出 JSON、代码块标记或任何额外说明。格式必须严格遵循：
+
+# 试卷标题
+
+## 一、选择题（每小题 X 分，共 X 分）
+1. 题干内容（　　）
+   - A. 选项A
+   - B. 选项B
+   - C. 选项C
+   - D. 选项D
+   - 答案：A
+
+## 二、填空题（每小题 X 分，共 X 分）
+1. 题干内容____
+   - 答案：……
+
+## 三、解答题（每小题 X 分，共 X 分）
+1. 题干内容
+   - 参考答案：……
+   - 评分标准：……
+
+规则：
+1. 试卷包含选择题、填空题、解答题三部分，每部分标题标注分值
+2. 难度均衡，覆盖基础知识、综合应用和拓展提高
+3. 每题标注答案；解答题给出评分标准
+4. 只输出上述结构，不要额外说明"""
+
+
+async def call_deepseek_stream(system_prompt: str, user_prompt: str, model: str = None):
+    """流式调用内容生成模型，逐段产出文本（Markdown），供前端即时渲染、避免长时间等待。"""
     if not DEEPSEEK_API_KEY:
         raise RuntimeError(
             "⚠️  未设置 DEEPSEEK_API_KEY\n"
@@ -164,8 +159,10 @@ async def call_deepseek(system_prompt: str, user_prompt: str, model: str = None)
             "  $env:DEEPSEEK_API_KEY='sk-你的key'"
         )
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
+    # 流式接口必须设置超时，否则模型挂起时任务会无限等待
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+        async with client.stream(
+            "POST",
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             headers={
                 "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -179,26 +176,31 @@ async def call_deepseek(system_prompt: str, user_prompt: str, model: str = None)
                 ],
                 "temperature": 0.7,
                 "max_tokens": 8192,
+                "stream": True,
             },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk["choices"][0]["delta"].get("content", "")
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+                if delta:
+                    yield delta
 
-    # 提取 JSON（AI 有时会包裹 markdown 代码块）
-    content = content.strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[-1]
-        content = content.rsplit("```", 1)[0]
-    return json.loads(content.strip())
 
-
-async def generate_ppt_content(
+async def stream_ppt_content(
     subject: str, topic: str, grade: str = "", style: str = "", outline: str = "",
     revision: str = "",
-) -> dict:
-    """生成 PPT 课件内容；revision 为用户在问答区提出的修改意见"""
-    user_prompt = f"""请为以下课程设计 PPT 课件内容：
+):
+    """流式生成 PPT 课件大纲（Markdown）；revision 为用户在问答区提出的修改意见"""
+    user_prompt = f"""请为以下课程设计 PPT 课件大纲：
 
 学科：{subject}
 课题：{topic}
@@ -208,14 +210,15 @@ async def generate_ppt_content(
 """
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    return await call_deepseek(PPT_SYSTEM_PROMPT, user_prompt, PPT_MODEL)
+    async for delta in call_deepseek_stream(PPT_SYSTEM_PROMPT, user_prompt, PPT_MODEL):
+        yield delta
 
 
-async def generate_doc_content(
+async def stream_doc_content(
     subject: str, topic: str, grade: str = "", requirements: str = "",
     revision: str = "",
-) -> dict:
-    """生成教案文档内容；revision 为用户在问答区提出的修改意见"""
+):
+    """流式生成教案文档（Markdown）；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下课程编写完整教案：
 
 学科：{subject}
@@ -225,16 +228,17 @@ async def generate_doc_content(
 """
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    return await call_deepseek(DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL)
+    async for delta in call_deepseek_stream(DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL):
+        yield delta
 
 
-async def generate_quiz_content(
+async def stream_quiz_content(
     subject: str, topic: str, grade: str = "", difficulty: str = "适中",
     scenario: str = "", count: int = 8, question_types: str = "",
     target: str = "", student_profile: str = "", assessment: str = "",
     revision: str = "",
-) -> dict:
-    """生成教学练习题；revision 为用户在问答区提出的修改意见"""
+):
+    """流式生成教学练习题（Markdown）；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下课程生成练习题：
 
 学科：{subject}
@@ -254,10 +258,11 @@ async def generate_quiz_content(
         user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    return await call_deepseek(QUIZ_SYSTEM_PROMPT, user_prompt, QUIZ_MODEL)
+    async for delta in call_deepseek_stream(QUIZ_SYSTEM_PROMPT, user_prompt, QUIZ_MODEL):
+        yield delta
 
 
-async def generate_exam_content(
+async def stream_exam_content(
     subject: str, topic: str, grade: str = "",
     difficulty: str = "中等", total_score: int = 100,
     choice_count: int = 10, fill_count: int = 6, essay_count: int = 4,
@@ -265,53 +270,8 @@ async def generate_exam_content(
     usage_scene: str = "", assessment: str = "",
     target: str = "", student_profile: str = "",
     revision: str = "",
-) -> dict:
-    """生成完整试卷；revision 为用户在问答区提出的修改意见"""
-    system_prompt = """你是一个专业的试卷出题专家。请为教师生成一套完整的考试试卷。
-
-要求：
-1. 试卷包含三部分：选择题、填空题、解答题
-2. 题目难度均衡，覆盖基础知识、综合应用和拓展提高
-3. 每道题标注分值
-4. 提供参考答案和评分标准
-5. 使用JSON格式返回，结构如下：
-{
-  "title": "试卷标题",
-  "subject": "学科",
-  "grade": "年级",
-  "total_score": 100,
-  "duration": "90分钟",
-  "sections": [
-    {
-      "type": "选择题",
-      "count": 10,
-      "score_per": 3,
-      "subtotal": 30,
-      "questions": [
-        {"id": 1, "content": "题目内容", "options": ["A. 选项A", "B. 选项B", "C. 选项C", "D. 选项D"], "answer": "A", "difficulty": "基础"}
-      ]
-    },
-    {
-      "type": "填空题",
-      "count": 6,
-      "score_per": 4,
-      "subtotal": 24,
-      "questions": [
-        {"id": 1, "content": "题目内容____", "answer": "参考答案", "difficulty": "中等"}
-      ]
-    },
-    {
-      "type": "解答题",
-      "count": 4,
-      "score_per": 10,
-      "subtotal": 40,
-      "questions": [
-        {"id": 1, "content": "题目内容", "answer": "参考答案要点", "difficulty": "提高", "scoring_criteria": "评分标准"}
-      ]
-    }
-  ],
-  "answer_key": "简要答案汇总"
-}"""
+):
+    """流式生成完整试卷（Markdown）；revision 为用户在问答区提出的修改意见"""
     user_prompt = f"""请为以下考试生成试卷：
 
 学科：{subject}
@@ -332,7 +292,8 @@ async def generate_exam_content(
         user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    return await call_deepseek(system_prompt, user_prompt, EXAM_MODEL)
+    async for delta in call_deepseek_stream(EXAM_SYSTEM_PROMPT, user_prompt, EXAM_MODEL):
+        yield delta
 
 
 # ── AI 备课助手 Prompt ──────────────────────────────────────────

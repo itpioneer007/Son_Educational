@@ -146,6 +146,26 @@ export async function refineCoursewareTask(taskId, instruction) {
 }
 
 /**
+ * 导出最终内容：把用户已确认的正文渲染为可下载文件（docx / html / pptx）
+ * @param {string} taskId
+ * @returns {Promise<{taskId: string, status: string}>}
+ */
+export async function exportCoursewareTask(taskId) {
+  const res = await fetch(`${API_BASE}/${taskId}/export`, { method: "POST" });
+  if (!res.ok) {
+    let detail = `导出失败: ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.detail) detail = data.detail;
+    } catch {
+      // 响应体不是 JSON 时沿用状态码提示
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/**
  * 查询任务状态
  * @param {string} taskId
  * @returns {Promise<Object>}
@@ -157,28 +177,39 @@ export async function getTaskStatus(taskId) {
 }
 
 /**
- * 建立 SSE 连接，实时监听生成进度
+ * 建立 SSE 连接，实时监听生成进度与正文增量
  * @param {string} taskId
  * @param {Object} callbacks
- * @param {(data: {status, progress, stage, filename}) => void} callbacks.onProgress
- * @param {(data: {filename}) => void} callbacks.onComplete
- * @param {(err: Error) => void} callbacks.onError
+ * @param {(text: string) => void} [callbacks.onDelta] - 正文增量（流式追加到消息）
+ * @param {(data: {status, progress, stage, filename}) => void} [callbacks.onProgress]
+ * @param {(data: {status, filename}) => void} [callbacks.onDone] - status 为 ready/completed 时回调
+ * @param {(err: Error) => void} [callbacks.onError]
  * @returns {EventSource}
  */
 export function subscribeProgress(taskId, callbacks) {
   const source = new EventSource(`${API_BASE}/${taskId}/stream`);
+
+  // 正文增量：边生成边渲染，避免长时间等待无反馈
+  source.addEventListener("delta", (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.text) callbacks.onDelta?.(data.text);
+    } catch {
+      // 单条增量解析失败不中断整体流
+    }
+  });
 
   source.addEventListener("progress", (e) => {
     try {
       const data = JSON.parse(e.data);
       callbacks.onProgress?.(data);
 
-      if (data.status === "completed") {
-        callbacks.onComplete?.(data);
+      if (data.status === "ready" || data.status === "completed") {
+        callbacks.onDone?.(data);
         source.close();
       }
       if (data.status === "failed") {
-        callbacks.onError?.(new Error(data.error || "生成失败"));
+        callbacks.onError?.(new Error(data.error || "处理失败"));
         source.close();
       }
     } catch (err) {
