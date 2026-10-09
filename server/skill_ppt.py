@@ -12,6 +12,7 @@ skill_ppt.py — GordenPPTSkill 精品模板生成引擎
 
 import os
 import re
+import sys
 import json
 import subprocess
 
@@ -298,8 +299,11 @@ def generate_skill_pptx(content: dict, slug: str,
 
     # 调用 build_pptx.py 保版式生成
     detail_path = os.path.join(_TEMPLATES_DIR, slug, "detail.json")
+    # 必须用当前解释器（sys.executable）。写死 "python" 在两种常见环境下会失败：
+    # ① 机器上只有 py / python3 没有 python 别名；② 用 venv 但未激活，
+    # 子进程落到系统 Python，缺失 python-pptx 依赖 → build_pptx.py 非零退出。
     cmd = [
-        "python", _BUILD_SCRIPT,
+        sys.executable, _BUILD_SCRIPT,
         _template_path(slug),
         edits_path,
         output_path,
