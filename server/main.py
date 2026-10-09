@@ -362,6 +362,24 @@ def _render_local_ppt(content: dict, template_id: str, uid: str = ""):
     return generate_pptx_from_template(content, template_id, uid)
 
 
+async def _release_stream_buffer(task_id: str, delay: float = 3.0):
+    """任务到达终态后释放流式缓冲区。
+
+    不立即 pop：SSE 客户端每 0.15s 轮询一次缓冲区，若生成刚结束就清空，
+    正在连接的客户端可能在最后一次轮询前取不到末尾增量，表现为正文尾部丢失。
+    留一个短窗口再清理，避免正文在内存中长期以两份存在（_stream_text 与
+    task["content_md"]）。
+
+    若期间又开始了新一轮生成（/refine 复用同一 task_id），status 已回到
+    processing，此时跳过清理，避免误删新一轮的缓冲。
+    """
+    await asyncio.sleep(delay)
+    task = _tasks.get(task_id)
+    if task is not None and task.get("status") not in ("ready", "completed", "failed"):
+        return
+    _stream_text.pop(task_id, None)
+
+
 async def _run_generation(task_id: str, params: dict):
     """后台流式生成正文（Markdown）：增量写入 _stream_text，完成后置为 ready 待导出。"""
     revision = params.get("revision", "")
@@ -427,6 +445,9 @@ async def _run_generation(task_id: str, params: dict):
     except Exception as e:
         _update_task(task_id, status="failed", error=str(e),
                      stage=f"生成失败：{str(e)[:80]}")
+    finally:
+        # 无论成功还是失败都进入终态，安排释放流式缓冲，避免正文长期双份驻留内存
+        asyncio.create_task(_release_stream_buffer(task_id))
 
 
 async def _run_export(task_id: str, params: dict):
