@@ -1,12 +1,55 @@
 import os
+import importlib.util
+
+# ==================================================================
+# 凭据读取优先级：环境变量 > server/config.local.py（不入库）> 空值
+# ==================================================================
+# 仓库内不保存任何 API Key。本地开发请在 server/ 下新建 config.local.py：
+#     DEEPSEEK_API_KEY = "sk-..."
+#     QWEN_API_KEY     = "sk-..."
+# 该文件已被 .gitignore 忽略（「API Key 配置（含敏感信息）」段）。
+# 部署环境请改用环境变量注入，两种方式任选其一。
+# ==================================================================
+# 注意：文件名是 config.local.py（与 .gitignore 条目一致），模块名含点号，
+# 无法用 import config_local 导入，因此这里按文件路径显式加载。
+_LOCAL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.py")
+
+
+def _load_local():
+    """加载同目录下不入库的 config.local.py；文件不存在或读取失败时返回 None。"""
+    if not os.path.exists(_LOCAL_FILE):
+        return None
+    spec = importlib.util.spec_from_file_location("config_local", _LOCAL_FILE)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return module
+
+
+_local = _load_local()
+
+
+def _cred(name: str, default: str = "") -> str:
+    """凭据取值：环境变量 > config.local.py > 默认值。"""
+    value = os.getenv(name)
+    if value:
+        return value
+    if _local is not None:
+        value = getattr(_local, name, None)
+        if value:
+            return value
+    return default
+
 
 # AI 配置 —— 内容生成模型（课件 / 教案 / 出题 / 试卷）
 # 统一走阿里云百炼 DashScope 的 deepseek-v4.1-flash（OpenAI 兼容接口）
 # 注册获取 Key: https://bailian.console.aliyun.com/
 # ==================================================================
-# 优先级：环境变量 > 下方硬编码（方便本地开发）
-# ==================================================================
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-ws-H.PHIXRLM.Deyh.MEUCIQChtnF3RkQKwBpfK7tQUDShC9-lAnXdSTQmY-VX9to3ZgIgWctnL6q5cmxjHzXzx1jckMFEw9rDkR0EdXs2RUeXWr4"
+DEEPSEEK_API_KEY = _cred("DEEPSEEK_API_KEY")
 
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-v4.1-flash"
@@ -24,10 +67,9 @@ EXAM_MODEL = os.getenv("EXAM_MODEL") or DEEPSEEK_MODEL
 # Qwen 对话配置 —— 阿里云百炼 DashScope（OpenAI 兼容接口）
 # 用于「知课 AI 备课助手」对话；课件/教案/出题/试卷仍走 DeepSeek
 # 注册获取 Key: https://bailian.console.aliyun.com/
+# 凭据读取方式同上：环境变量 > server/config.local.py
 # ==================================================================
-# 优先级：环境变量 > 下方硬编码（方便本地开发）
-# ==================================================================
-QWEN_API_KEY = os.getenv("QWEN_API_KEY") or "sk-ws-H.EYLDXPX.uTtl.MEYCIQCDdcBAkELSb4AjzM5gIFXIydrgZVLDMFMWbtBUJ4918AIhAKAVh7wpX4DmX0gPcp2bIMc31SgGGT78xCkCRlyUb6TE"
+QWEN_API_KEY = _cred("QWEN_API_KEY")
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_MODEL = os.getenv("QWEN_MODEL") or "qwen3.8-27b"  # 可用 qwen-plus / qwen-max / qwen-turbo 等
 
