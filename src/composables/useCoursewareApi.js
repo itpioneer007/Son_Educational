@@ -166,17 +166,6 @@ export async function exportCoursewareTask(taskId) {
 }
 
 /**
- * 查询任务状态
- * @param {string} taskId
- * @returns {Promise<Object>}
- */
-export async function getTaskStatus(taskId) {
-  const res = await fetch(`${API_BASE}/${taskId}`);
-  if (!res.ok) throw new Error(`查询失败: ${res.status}`);
-  return res.json();
-}
-
-/**
  * 建立 SSE 连接，实时监听生成进度与正文增量
  * @param {string} taskId
  * @param {Object} callbacks
