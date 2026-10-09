@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -41,12 +42,36 @@ from skill_ppt import (
 )
 from spark_ppt import generate_pptx_via_spark, get_templates as get_spark_templates
 
-app = FastAPI(title="EduAI 课件生成 API", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """启动时准备输出/数据目录并载入历史任务记录。
+
+    替代已废弃的 @app.on_event("startup")：该钩子在未来 FastAPI 版本会被移除。
+    """
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    _load_tasks()
+    yield
+
+
+app = FastAPI(title="EduAI 课件生成 API", version="1.0.0", lifespan=_lifespan)
 
 # CORS — 允许前端 dev server 跨域
+# 原配置同时开了 allow_origins=["*"] 与 allow_credentials=True，二者互相矛盾：
+# 按 CORS 规范，凭据模式下不允许把 Origin 回成通配符，浏览器会直接拒绝该响应，
+# 这组配置实际不生效。改为环境变量驱动的显式白名单（默认覆盖 Vite dev server）。
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
