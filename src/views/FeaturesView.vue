@@ -3179,109 +3179,6 @@ watch(totalHistoryPages, (value) => {
   if (historyPage.value > value) historyPage.value = value;
 });
 
-// ── AI 助手「转入生成」桥接：读取草稿并自动预填表单 ──────────────
-const BRIDGE_KEY = "zhike-features-bridge";
-
-// 从 sessionStorage 读取助手桥接草稿（读取后清除，避免刷新重复套用）
-function readBridgeContent() {
-  try {
-    const raw = sessionStorage.getItem(BRIDGE_KEY);
-    if (!raw) return "";
-    sessionStorage.removeItem(BRIDGE_KEY);
-    const data = JSON.parse(raw);
-    if (!data || !data.content) return "";
-    // 仅接受最近 60 秒内的桥接，防止过期残留污染表单
-    if (Date.now() - (data.ts || 0) > 60_000) return "";
-    return data.content;
-  } catch {
-    return "";
-  }
-}
-
-// 从 AI 回复的 markdown 文本中抽取某标题下的段落（遇到下一个标题即停）
-function extractSection(text, titles) {
-  if (!text) return "";
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const titleSet = titles.map((t) => t.replace(/[#*\s·•:：>]/g, ""));
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const clean = lines[i].replace(/[#*\s·•:：>]/g, "");
-    if (titleSet.some((t) => clean.includes(t))) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) return "";
-  const out = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*#{1,6}\s+/.test(line)) break;
-    if (/^\s*\*\*[^*]+\*\*\s*$/.test(line)) break;
-    out.push(line.trim());
-  }
-  return out.filter(Boolean).join("\n").trim();
-}
-
-// 从 AI 回复里推断学科 / 学段并抽取教学目标 / 重难点
-function extractAssistantInfo(content) {
-  const info = { subject: "", grade: "", goals: "", keyPoints: "" };
-  if (!content) return info;
-
-  const subjectMatch = content.match(
-    /(语文|数学|英语|物理|化学|生物|历史|地理|政治|道德与法治)/,
-  );
-  if (subjectMatch) info.subject = subjectMatch[1];
-
-  if (/小学低年级|小学低段|一、?二年级|一二年级/.test(content)) {
-    info.grade = "小学低年级";
-  } else if (/小学高年级|小学高段|五、?六年级|五六年级/.test(content)) {
-    info.grade = "小学高年级";
-  } else if (/初中|七年级|八年级|九年级|初一|初二|初三/.test(content)) {
-    info.grade = "初中";
-  } else if (/高中|高一|高二|高三/.test(content)) {
-    info.grade = "高中";
-  }
-
-  info.goals = extractSection(content, ["教学目标", "学习目标"]);
-  info.keyPoints = extractSection(content, [
-    "教学重难点",
-    "重难点",
-    "重点与难点",
-    "教学重点难点",
-  ]);
-
-  return info;
-}
-
-// 将草稿里的学科 / 学段 / 教学目标 / 重难点填入对应表单
-async function applyAssistantContent(type, content) {
-  if (!content) return;
-  const info = extractAssistantInfo(content);
-
-  const isPpt = type === "ppt";
-  const isDoc = type === "doc";
-  const isQuiz = type === "quiz";
-
-  if (isPpt || isDoc) {
-    const form = isPpt ? pptForm.value : docForm.value;
-    if (info.subject) form.subject = info.subject;
-    if (isPpt && info.grade) form.grade = info.grade;
-    // 学科变更会触发 watcher 清空目标/重难点，等其执行完再写回
-    await nextTick();
-    if (info.goals) {
-      form.teachingGoals = CUSTOM_OPTION;
-      form.goalCustom = info.goals;
-    }
-    if (info.keyPoints) {
-      form.keyPoints = CUSTOM_OPTION;
-      form.keyCustom = info.keyPoints;
-    }
-  } else if (isQuiz) {
-    if (info.subject) questionForm.value.subject = info.subject;
-    if (info.grade) questionForm.value.stage = info.grade;
-  }
-}
-
 // 生命周期钩子
 onMounted(() => {
   // 加载讯飞智文模板（仅元数据，不消耗额度）
@@ -3313,11 +3210,6 @@ onMounted(() => {
     }
     if (queryType === "ppt" && queryOutline) {
       pptForm.value.outlineCustom = queryOutline;
-    }
-    // 读取助手桥接草稿，自动预填学科/学段/教学目标/重难点
-    const queryContent = readBridgeContent();
-    if (queryContent) {
-      applyAssistantContent(queryType, queryContent);
     }
   }
   // 延迟初始化确保DOM完全渲染
