@@ -439,7 +439,11 @@ def list_tasks():
             "error": t.get("error"),
             "created_at": t.get("created_at", ""),
         }
-        for t in sorted(_tasks.values(), key=lambda x: x["id"], reverse=True)
+        # 按创建时间倒序。注意不能用 id 排序：id 是 uuid4 的随机前缀，
+        # 按它排序会得到随机顺序，导致管理后台"最近任务"每次刷新都在跳。
+        for t in sorted(
+            _tasks.values(), key=lambda x: x.get("created_at", ""), reverse=True
+        )
     ]
 
 
