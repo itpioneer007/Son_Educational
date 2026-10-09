@@ -79,5 +79,6 @@ PORT = 8000
 BASE_DIR = os.path.dirname(__file__)
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 DATA_DIR = os.path.join(BASE_DIR, "data")
-TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")  # 任务记录持久化文件
+TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")  # 任务记录（仅元数据）
+CONTENTS_DIR = os.path.join(DATA_DIR, "contents")  # 正文 Markdown，按 task_id 单独存放
 MAX_FILE_SIZE_MB = 50

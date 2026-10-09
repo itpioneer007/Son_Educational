@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import OUTPUT_DIR, DATA_DIR, TASKS_FILE, HOST, PORT
+from config import OUTPUT_DIR, DATA_DIR, TASKS_FILE, CONTENTS_DIR, HOST, PORT
 from ai_service import (
     stream_ppt_content, stream_doc_content, stream_quiz_content, stream_exam_content,
     chat_with_qwen, chat_with_qwen_stream,
@@ -50,6 +50,7 @@ async def _lifespan(app: FastAPI):
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(CONTENTS_DIR, exist_ok=True)
     _load_tasks()
     yield
 
@@ -100,14 +101,82 @@ def _load_tasks():
     except (json.JSONDecodeError, OSError):
         # 损坏文件不阻塞启动，保留空内存态
         pass
+        return
+
+    # 兼容旧数据：早期版本把正文直接存在 tasks.json 的 content_md 里，
+    # 而新实现落盘会剥离该字段。若此处不迁出，老任务的正文会在下次重启后丢失。
+    for tid, t in _tasks.items():
+        md = t.get("content_md")
+        if md and not os.path.exists(_content_path(tid)):
+            _write_content(tid, md)
+
+
+# ── 正文存储 ─────────────────────────────────────────────────
+# 任务元数据存 tasks.json，正文 Markdown 按 task_id 单独落盘。
+# 这样 tasks.json 只随任务条数线性增长，不会因为每篇教案/试卷的全文而膨胀；
+# 正文则在真正需要时（查询任务 / 触发导出）再懒加载进内存。
+
+def _content_path(task_id: str) -> str:
+    return os.path.join(CONTENTS_DIR, f"{task_id}.md")
+
+
+def _write_content(task_id: str, text: str):
+    """写入（覆盖）任务正文"""
+    try:
+        os.makedirs(CONTENTS_DIR, exist_ok=True)
+        with open(_content_path(task_id), "w", encoding="utf-8") as f:
+            f.write(text or "")
+    except OSError:
+        pass
+
+
+def _read_content(task_id: str) -> str:
+    """读取任务正文；不存在或读取失败返回空串"""
+    try:
+        with open(_content_path(task_id), "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _delete_content(task_id: str):
+    """删除任务正文（随任务一并清理）"""
+    try:
+        os.remove(_content_path(task_id))
+    except OSError:
+        pass
+
+
+def _ensure_content(task: dict) -> str:
+    """确保 task 的正文已载入内存，返回正文。
+
+    内存里没有时（典型场景：服务重启后任务从 tasks.json 恢复）从
+    data/contents/{task_id}.md 读回，使 GET /api/courseware/{id} 与导出
+    流程都能拿到正文；启动时不预读，避免正文全量驻留内存。
+    """
+    md = task.get("content_md")
+    if md:
+        return md
+    if not task.get("id"):
+        return ""
+    md = _read_content(task["id"])
+    if md:
+        task["content_md"] = md
+    return md
 
 
 def _save_tasks():
-    """将任务记录落盘"""
+    """将任务记录落盘。
+
+    正文不写入 tasks.json：一篇教案/试卷全文 3k–8k 字，若随任务一起落盘，
+    该文件会无界膨胀（且启动时被整体读入内存）。正文另存
+    data/contents/{task_id}.md，需要时用 _ensure_content() 懒加载。
+    """
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
+        snapshot = {tid: {**t, "content_md": None} for tid, t in _tasks.items()}
         with open(TASKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(_tasks, f, ensure_ascii=False, indent=2)
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
 
@@ -273,7 +342,7 @@ async def export_courseware(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.get("status") in ("processing", "exporting"):
         raise HTTPException(status_code=409, detail="当前正在处理中，请稍候")
-    if not task.get("content_md"):
+    if not _ensure_content(task):
         raise HTTPException(status_code=400, detail="内容尚未生成，无法导出")
 
     # 清空流式缓冲，避免导出时 SSE 重复推送正文
@@ -345,9 +414,12 @@ async def _run_generation(task_id: str, params: dict):
             if task and task.get("progress", 5) < 85:
                 task["progress"] = task["progress"] + 1
 
+        text = _stream_text.get(task_id, "")
+        # 正文落独立文件；tasks.json 里不再保存全文
+        _write_content(task_id, text)
         _update_task(
             task_id,
-            content_md=_stream_text.get(task_id, ""),
+            content_md=text,
             progress=100,
             status="ready",
             stage="内容已生成，可提出修改或导出",
@@ -360,7 +432,7 @@ async def _run_generation(task_id: str, params: dict):
 async def _run_export(task_id: str, params: dict):
     """把用户确认后的 Markdown 内容渲染为最终文件（docx / html / pptx）。"""
     task = _tasks.get(task_id, {})
-    md = task.get("content_md") or ""
+    md = _ensure_content(task)
     meta = {
         "subject": params.get("subject", ""),
         "grade": params.get("grade", ""),
@@ -454,6 +526,8 @@ def get_task(task_id: str):
     task = _tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
+    # 正文可能只在磁盘上（服务重启后），返回前按需载入
+    _ensure_content(task)
     return task
 
 
@@ -633,6 +707,7 @@ def delete_task(task_id: str):
     fp = task.get("filepath")
     if fp and os.path.exists(fp):
         os.remove(fp)
+    _delete_content(task_id)
     _save_tasks()
     return {"ok": True}
 
