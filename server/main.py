@@ -15,6 +15,7 @@ import json
 import os
 import uuid
 import asyncio
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -81,7 +82,10 @@ app.add_middleware(
 # ── 任务存储 ─────────────────────────────────────────────────
 # 任务持久化到本地 JSON 文件，服务重启后记录不丢失，供管理后台统计
 _tasks: dict[str, dict] = {}
-_tasks_lock = asyncio.Lock()
+# 写盘互斥锁。必须用 threading.Lock 而非 asyncio.Lock：_new_task / _update_task
+# 既会从协程里调用，也会从同步路由（delete_task）里调用 —— 后者由 FastAPI
+# 丢到线程池执行，asyncio.Lock 跨线程不起作用。
+_tasks_lock = threading.Lock()
 
 # 内容流式缓冲区：task_id → 已生成的 Markdown 文本。
 # 只存在内存里（不落盘、不放进 _tasks），SSE 按游标增量推送给前端即时渲染。
@@ -171,14 +175,21 @@ def _save_tasks():
     正文不写入 tasks.json：一篇教案/试卷全文 3k–8k 字，若随任务一起落盘，
     该文件会无界膨胀（且启动时被整体读入内存）。正文另存
     data/contents/{task_id}.md，需要时用 _ensure_content() 懒加载。
+
+    并发安全：加锁串行化写入；先写临时文件再 os.replace 原子替换，
+    避免多个线程同时写、或进程在写一半时中断，导致 tasks.json 内容残缺
+    （残留的半截 JSON 会让下次启动 _load_tasks 直接失败，任务记录全丢）。
     """
-    try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        snapshot = {tid: {**t, "content_md": None} for tid, t in _tasks.items()}
-        with open(TASKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
+    with _tasks_lock:
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            snapshot = {tid: {**t, "content_md": None} for tid, t in _tasks.items()}
+            tmp_path = TASKS_FILE + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, TASKS_FILE)
+        except OSError:
+            pass
 
 
 def _new_task(task_type: str, subject: str = "", topic: str = "", grade: str = "") -> str:
