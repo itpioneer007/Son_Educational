@@ -17,8 +17,6 @@ import uuid
 import asyncio
 import threading
 from datetime import datetime
-from pathlib import Path
-from typing import Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
