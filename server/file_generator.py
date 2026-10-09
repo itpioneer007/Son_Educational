@@ -23,6 +23,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 from config import OUTPUT_DIR
+from output_naming import unique_output_path
 
 # ════════════════════════════════════════════════════════════════
 # PPT 模版映射配置
@@ -503,7 +504,7 @@ def _remove_all_slides(prs):
         xml_slides.remove(sld_id_elem)
 
 
-def generate_pptx_from_template(content: dict, template_id: str = "") -> tuple:
+def generate_pptx_from_template(content: dict, template_id: str = "", uid: str = "") -> tuple:
     """
     基于 public/ppts 目录下的预置 PPTX 模版生成课件。
     打开模版文件，移除原有幻灯片，保留模版的主题/母版设计，
@@ -524,7 +525,7 @@ def generate_pptx_from_template(content: dict, template_id: str = "") -> tuple:
     if not template_path:
         # 模版不可用，回退到内置主题生成
         print(f"[PPT] 模版 '{tid}' 不可用，回退到内置主题生成")
-        return generate_pptx(content)
+        return generate_pptx(content, uid)
     
     template_name = TEMPLATE_ID_MAP.get(tid, tid)
     print(f"[PPT] 使用模版: {template_name} → {template_path}")
@@ -567,9 +568,9 @@ def generate_pptx_from_template(content: dict, template_id: str = "") -> tuple:
     
     # 保存
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', content.get('title', '课件'))
-    filename = f"{safe_title}.pptx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(
+        content.get('title', '课件'), "pptx", uid, "课件"
+    )
     prs.save(filepath)
     
     tmpl_info = next((t for t in TEMPLATE_LIST if t["id"] == tid), None)
@@ -578,7 +579,7 @@ def generate_pptx_from_template(content: dict, template_id: str = "") -> tuple:
     return filepath, filename
 
 
-def generate_pptx(content: dict) -> tuple:
+def generate_pptx(content: dict, uid: str = "") -> tuple:
     """根据 AI 生成的内容创建 PPTX 文件，自动匹配学科主题"""
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -611,9 +612,9 @@ def generate_pptx(content: dict) -> tuple:
 
     # 保存
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', content.get('title', '课件'))
-    filename = f"{safe_title}.pptx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(
+        content.get('title', '课件'), "pptx", uid, "课件"
+    )
     prs.save(filepath)
     print(f"[PPT] 使用主题: {theme['name']} → {filepath}")
     return filepath, filename
@@ -727,7 +728,7 @@ def _add_info_table(doc, items):
     return table
 
 
-def generate_docx(content: dict) -> tuple:
+def generate_docx(content: dict, uid: str = "") -> tuple:
     """生成美观、结构规范的教案 DOCX 文件（三层次标题 + 专业排版样式）"""
     doc = Document()
 
@@ -839,9 +840,9 @@ def generate_docx(content: dict) -> tuple:
 
     # 保存
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', content.get('title', '教案'))
-    filename = f"{safe_title}.docx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(
+        content.get('title', '教案'), "docx", uid, "教案"
+    )
     doc.save(filepath)
     print(f"[DOC] 已生成: {filepath}")
     return filepath, filename
@@ -851,7 +852,7 @@ def generate_docx(content: dict) -> tuple:
 # HTML 题目生成 - 强化样式
 # ════════════════════════════════════════════════════════════════
 
-def generate_quiz_html(content: dict) -> tuple:
+def generate_quiz_html(content: dict, uid: str = "") -> tuple:
     """生成精美教学题 HTML 页面"""
     title = content.get('title', '练习题')
     question_count = len(content.get('questions', []))
@@ -1052,16 +1053,14 @@ def generate_quiz_html(content: dict) -> tuple:
 </body></html>'''
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)
-    filename = f"{safe_title}.html"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(title, "html", uid)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[HTML] 已生成: {filepath}")
     return filepath, filename
 
 
-def generate_exam_html(content: dict) -> tuple:
+def generate_exam_html(content: dict, uid: str = "") -> tuple:
     """生成试卷 HTML 页面，含选择题/填空题/解答题"""
     title = content.get("title", "综合试卷")
     subject = content.get("subject", "")
@@ -1215,9 +1214,7 @@ def generate_exam_html(content: dict) -> tuple:
 </html>"""
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)
-    filename = f"{safe_title}.html"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(title, "html", uid)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"[HTML Exam] 已生成: {filepath}")
@@ -1296,7 +1293,7 @@ def _strip_first_heading_line(md: str) -> str:
     return "\n".join(out)
 
 
-def generate_docx_from_markdown(md: str, meta: dict) -> tuple:
+def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     """把确认后的 Markdown 教案渲染为 DOCX（所见即所得）。"""
     doc = Document()
     section = doc.sections[0]
@@ -1375,9 +1372,7 @@ def generate_docx_from_markdown(md: str, meta: dict) -> tuple:
             _set_cn_font(p.add_run(_strip_md_inline(payload)), size=11, color=_DOC_BODY)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title_text)
-    filename = f"{safe_title}.docx"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(title_text, "docx", uid, "教案")
     doc.save(filepath)
     print(f"[DOC] 已生成: {filepath}")
     return filepath, filename
@@ -1441,7 +1436,7 @@ def _markdown_to_html(md: str) -> str:
     return "\n".join(parts)
 
 
-def _render_markdown_html(md: str, meta: dict, kind: str) -> tuple:
+def _render_markdown_html(md: str, meta: dict, kind: str, uid: str = "") -> tuple:
     """通用：Markdown → 独立 HTML 文件（练习题 / 试卷）。"""
     default_title = "试卷" if kind == "exam" else "练习题"
     title = _first_heading(md, meta.get("topic") or default_title)
@@ -1484,23 +1479,21 @@ def _render_markdown_html(md: str, meta: dict, kind: str) -> tuple:
 </html>"""
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)
-    filename = f"{safe_title}.html"
-    filepath = os.path.join(OUTPUT_DIR, filename)
+    filepath, filename = unique_output_path(title, "html", uid)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(doc)
     print(f"[HTML] 已生成: {filepath}")
     return filepath, filename
 
 
-def generate_quiz_html_from_markdown(md: str, meta: dict) -> tuple:
+def generate_quiz_html_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     """把确认后的 Markdown 练习题渲染为 HTML。"""
-    return _render_markdown_html(md, meta, "quiz")
+    return _render_markdown_html(md, meta, "quiz", uid)
 
 
-def generate_exam_html_from_markdown(md: str, meta: dict) -> tuple:
+def generate_exam_html_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     """把确认后的 Markdown 试卷渲染为 HTML。"""
-    return _render_markdown_html(md, meta, "exam")
+    return _render_markdown_html(md, meta, "exam", uid)
 
 
 def parse_ppt_outline(md: str, meta: dict = None) -> dict:

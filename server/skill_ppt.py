@@ -49,6 +49,7 @@ SKILL_TEMPLATE_SLUGS = set(SKILL_TEMPLATES.keys())
 
 # 输出目录（与 file_generator 共用 config.OUTPUT_DIR）
 from config import OUTPUT_DIR
+from output_naming import safe_stem, unique_output_path
 
 
 # ════════════════════════════════════════════════════════════════
@@ -262,7 +263,7 @@ def _build_edits(detail: dict, content: dict, slug: str) -> dict:
 # ════════════════════════════════════════════════════════════════
 
 def generate_skill_pptx(content: dict, slug: str,
-                        edits_input: dict | None = None) -> tuple:
+                        edits_input: dict | None = None, uid: str = "") -> tuple:
     """
     基于 skill 模板生成课件 PPTX。
 
@@ -270,6 +271,7 @@ def generate_skill_pptx(content: dict, slug: str,
         content: AI 生成的教学内容（含 title/slides/subject/grade 等）
         slug: skill 模板 slug（如 cute-orange-class）
         edits_input: 可选，调用方直接传入 edits.json（跳过自动映射）
+        uid: 调用方任务 ID，同时拼入产物与临时文件名，避免同名课题互相覆盖
 
     Returns:
         (filepath, filename)
@@ -288,14 +290,15 @@ def generate_skill_pptx(content: dict, slug: str,
 
     # 写 edits.json 到临时文件
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', content.get('title', '课件'))
-    edits_path = os.path.join(OUTPUT_DIR, f"_skill_{safe_title}_edits.json")
+    # 临时 edits.json 同样带 uid：两个同名课题并发生成时不会互相踩踏
+    stem = safe_stem(content.get("title", "课件"), "课件")
+    suffix = f"__{uid}" if uid else ""
+    edits_path = os.path.join(OUTPUT_DIR, f"_skill_{stem}{suffix}_edits.json")
     with open(edits_path, "w", encoding="utf-8") as f:
         json.dump(edits_spec, f, ensure_ascii=False, indent=2)
 
     # 输出 pptx
-    filename = f"{safe_title}.pptx"
-    output_path = os.path.join(OUTPUT_DIR, filename)
+    output_path, filename = unique_output_path(content.get("title", "课件"), "pptx", uid, "课件")
 
     # 调用 build_pptx.py 保版式生成
     detail_path = os.path.join(_TEMPLATES_DIR, slug, "detail.json")

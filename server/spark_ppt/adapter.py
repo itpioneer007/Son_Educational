@@ -12,7 +12,6 @@ spark_ppt.adapter — 讯飞星火（讯飞智文）PPT 生成适配层
 
 import os
 import sys
-import re
 import inspect
 import importlib
 import traceback
@@ -63,14 +62,19 @@ def _find_entry():
     return None
 
 
-def _build_output_path(outline: dict) -> str:
-    """按课件标题在 OUTPUT_DIR 下生成一个不冲突的 pptx 输出路径。"""
+def _build_output_path(outline: dict, uid: str = "") -> str:
+    """按课件标题在 OUTPUT_DIR 下生成一个不冲突的 pptx 输出路径。
+
+    uid 传入 task_id：不同任务互不覆盖，同一任务重复导出路径保持稳定。
+    """
     from config import OUTPUT_DIR
+    from output_naming import safe_stem
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    title = str(outline.get("title") or "课件")
-    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip() or "课件"
-    return os.path.join(OUTPUT_DIR, f"{safe_title}_讯飞.pptx")
+    stem = safe_stem(outline.get("title"), "课件")
+    if uid:
+        stem = f"{stem}__{uid}"
+    return os.path.join(OUTPUT_DIR, f"{stem}_讯飞.pptx")
 
 
 def _call_entry(entry, outline, output_path, options):
@@ -91,12 +95,13 @@ def _call_entry(entry, outline, output_path, options):
     return entry(outline, output_path)
 
 
-def generate_pptx_via_spark(outline: dict, params: dict = None):
+def generate_pptx_via_spark(outline: dict, params: dict = None, uid: str = ""):
     """调用讯飞 PPT 脚本生成课件。
 
     参数:
         outline: DeepSeek 生成的 PPT 大纲（含 title / slides 等字段）
         params:  任务原始参数（学科、年级、模版等），透传给脚本备用
+        uid:     任务 ID，用于生成互不冲突的输出文件名
 
     返回:
         成功 -> (filepath, filename)
@@ -109,7 +114,7 @@ def generate_pptx_via_spark(outline: dict, params: dict = None):
         print("[SPARK] 未在 spark_ppt/ 下找到入口函数（generate_pptx / create_pptx），跳过讯飞生成")
         return None
 
-    output_path = _build_output_path(outline)
+    output_path = _build_output_path(outline, uid)
     try:
         result = _call_entry(entry, outline, output_path, params or {})
 

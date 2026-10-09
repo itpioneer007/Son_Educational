@@ -261,11 +261,11 @@ async def export_courseware(task_id: str):
     return {"taskId": task_id, "status": "exporting"}
 
 
-def _render_local_ppt(content: dict, template_id: str):
+def _render_local_ppt(content: dict, template_id: str, uid: str = ""):
     """本地模板渲染：skill 精品模版走保版式引擎，其余走通用模板。"""
     if template_id and is_skill_template(template_id):
-        return generate_skill_pptx(content, template_id)
-    return generate_pptx_from_template(content, template_id)
+        return generate_skill_pptx(content, template_id, uid=uid)
+    return generate_pptx_from_template(content, template_id, uid)
 
 
 async def _run_generation(task_id: str, params: dict):
@@ -359,7 +359,7 @@ async def _run_export(task_id: str, params: dict):
             if engine == "spark":
                 _update_task(task_id, progress=50, stage="正在排版并自动配图…")
                 # 讯飞脚本可能同步阻塞，放线程池执行避免卡住事件循环
-                spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params)
+                spark_result = await asyncio.to_thread(generate_pptx_via_spark, content, params, task_id)
                 if spark_result:
                     filepath, filename = spark_result
                 else:
@@ -368,22 +368,22 @@ async def _run_export(task_id: str, params: dict):
 
             if not filepath:
                 filepath, filename = await asyncio.to_thread(
-                    _render_local_ppt, content, template_id
+                    _render_local_ppt, content, template_id, task_id
                 )
         elif params.get("type") == "doc":
             _update_task(task_id, progress=60, stage="正在生成 Word 教案…")
             filepath, filename = await asyncio.to_thread(
-                generate_docx_from_markdown, md, meta
+                generate_docx_from_markdown, md, meta, task_id
             )
         elif params.get("type") == "exam":
             _update_task(task_id, progress=60, stage="正在生成试卷文件…")
             filepath, filename = await asyncio.to_thread(
-                generate_exam_html_from_markdown, md, meta
+                generate_exam_html_from_markdown, md, meta, task_id
             )
         else:
             _update_task(task_id, progress=60, stage="正在生成练习文件…")
             filepath, filename = await asyncio.to_thread(
-                generate_quiz_html_from_markdown, md, meta
+                generate_quiz_html_from_markdown, md, meta, task_id
             )
 
         _update_task(task_id, progress=100, stage="导出完成",
