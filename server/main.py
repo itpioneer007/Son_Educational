@@ -31,7 +31,7 @@ from ai_service import (
     chat_with_qwen, chat_with_qwen_stream,
 )
 from file_generator import (
-    generate_pptx, generate_pptx_from_template,
+    generate_pptx_from_template,
     generate_docx_from_markdown, generate_quiz_html_from_markdown,
     generate_exam_html_from_markdown, parse_ppt_outline,
     get_template_list, pick_template,
@@ -635,16 +635,6 @@ def delete_task(task_id: str):
         os.remove(fp)
     _save_tasks()
     return {"ok": True}
-
-
-# ── 静态文件服务（预览输出目录） ──────────────────────────────
-
-@app.on_event("startup")
-def startup():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    # 加载历史任务记录，保证管理后台统计不丢失
-    _load_tasks()
 
 
 if __name__ == "__main__":
