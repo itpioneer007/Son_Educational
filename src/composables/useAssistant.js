@@ -39,14 +39,14 @@ function titleFromMessage(text) {
 /**
  * 流式调用后端 Qwen 接口，逐段读取 SSE 返回。
  * @param {Array} messages 多轮对话历史 [{role, content}]
- * @param {object} options { feature }
+ * @param {object} options { profile, onDelta }
  * @param {Function} onDelta 每收到一段内容时回调（参数为累积的完整文本）
  * @returns {Promise<string>} 累积的完整回复文本
  */
 export async function sendToTongyi(messages, options = {}, onDelta) {
   // 整体超时保护：防止后端/AI 挂起导致 isLoading 永久卡死
   const controller = new AbortController();
-  // 生成完整教案/出题草稿可能接近 90 秒，超时设 180s 兜底（仅防真正卡死）
+  // 长回答（如完整教案式长文）可能接近 90 秒，超时设 180s 兜底（仅防真正卡死）
   const TIMEOUT_MS = 180000;
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -57,7 +57,6 @@ export async function sendToTongyi(messages, options = {}, onDelta) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        feature: options.feature || "",
         profile: options.profile || {},
       }),
       signal: controller.signal,
@@ -128,11 +127,6 @@ const state = reactive({
   activeId: loadActiveId(),
 });
 
-// 临时会话（定向功能使用，不持久化，切页即丢失）
-const ephemeral = reactive({
-  session: null,
-});
-
 function persistSessions() {
   saveSessions(state.sessions);
 }
@@ -147,8 +141,6 @@ export function useAssistant() {
   }
 
   function getActiveSession() {
-    // 优先返回临时会话（定向功能）
-    if (ephemeral.session) return ephemeral.session;
     return state.sessions.find((s) => s.id === state.activeId) || null;
   }
 
@@ -218,23 +210,7 @@ export function useAssistant() {
     const text = content.trim();
     if (!text) return null;
 
-    // 临时会话（定向功能）：不持久化，切页即丢失
-    const isEphemeral = options.ephemeral === true;
-    let session;
-    if (isEphemeral) {
-      if (!ephemeral.session) {
-        ephemeral.session = reactive({
-          id: uid("tmp"),
-          title: titleFromMessage(text),
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          messages: [],
-        });
-      }
-      session = ephemeral.session;
-    } else {
-      session = ensureSession();
-    }
+    const session = ensureSession();
 
     const userMsg = {
       id: uid("m"),
@@ -247,7 +223,7 @@ export function useAssistant() {
     if (session.messages.filter((m) => m.role === "user").length === 1) {
       session.title = titleFromMessage(text);
     }
-    if (!isEphemeral) updateSession(session);
+    updateSession(session);
 
     // 先插入空的 AI 占位消息，流式过程中不断填充
     const aiMsg = reactive({
@@ -257,27 +233,23 @@ export function useAssistant() {
       createdAt: Date.now(),
     });
     session.messages.push(aiMsg);
-    if (!isEphemeral) updateSession(session);
+    updateSession(session);
 
     try {
       const reply = await sendToTongyi(session.messages, options, (full) => {
         aiMsg.content = full;
-        if (!isEphemeral) updateSession(session);
+        updateSession(session);
         if (typeof options.onDelta === "function") options.onDelta(full);
       });
       aiMsg.content = reply;
-      if (!isEphemeral) updateSession(session);
+      updateSession(session);
     } catch (err) {
       aiMsg.content = "";
       aiMsg.error = err.message || "AI 服务调用失败";
-      if (!isEphemeral) updateSession(session);
+      updateSession(session);
     }
 
     return { session, userMsg, aiMsg };
-  }
-
-  function clearEphemeral() {
-    ephemeral.session = null;
   }
 
   function groupSessionsByDate(sessionList) {
@@ -307,7 +279,6 @@ export function useAssistant() {
     deleteSession,
     updateSessionTitle,
     pinSession,
-    clearEphemeral,
     sendMessage,
     groupSessionsByDate,
   };

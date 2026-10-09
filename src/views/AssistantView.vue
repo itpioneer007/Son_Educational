@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { marked } from "marked";
 import {
@@ -17,7 +17,16 @@ const inputText = ref("");
 const isLoading = ref(false);
 const sidebarOpen = ref(false);
 const messagesEl = ref(null);
+const landingInput = ref(null);
 const searchQuery = ref("");
+
+/**
+ * 两态界面：
+ *   home —— 主页面，居中提问入口，像 DeepSeek 首页
+ *   chat —— 对话页，左侧历史记录 + 中间问答区
+ * 用户在主页面发出第一条消息（或点开历史）后进入 chat。
+ */
+const view = ref("home");
 
 // 直接绑定 composable 的模块级响应式状态，切页/刷新保持同一份数据
 const sessions = computed(() => assistant.getSessions());
@@ -30,329 +39,74 @@ const hasMessages = computed(
   () => (activeSession.value?.messages.length ?? 0) > 0,
 );
 
-// 大功能（构思层）：不生成文件，专注帮教师把想法理清楚、产出内容草稿
-// 产出结果下方提供「转入生成」按钮，桥接到核心功能页落地成真实文件
-const features = [
-  {
-    id: "plan",
-    label: "备课构思",
-    hint: "目标·重难点·导入·环节",
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>',
-  },
-  {
-    id: "lesson",
-    label: "教案草稿",
-    hint: "完整教案文字稿",
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z"/><path d="M20 17v5H6.5A2.5 2.5 0 0 1 4 19.5"/></svg>',
-  },
-  {
-    id: "quiz",
-    label: "出题草稿",
-    hint: "分层题目清单",
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v4h4"/><path d="M9 13l2 2 4-4"/></svg>',
-  },
+// 教师场景示例提问：点一下就能直接问，避免"打开后不知道问什么"
+const SUGGESTIONS = [
+  "《函数的单调性》这节课怎么设计导入？",
+  "学生总把质数和奇数搞混，怎么讲清楚？",
+  "帮我梳理这篇文言文的教学重难点",
+  "基础薄弱的学生，作业该怎么分层布置？",
 ];
 
-// 「通用问答」入口图标（自由对话，对话历史仅在此功能下展示）
-const chatIcon =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H9l-3 3v-3H7a3 3 0 0 1-3-3V6z"/></svg>';
-
-// 当前功能（'' = 通用问答）
-const activeFeature = ref("");
-// 最近一次通过功能表单触发的课题（用于「转入生成」桥接预填）
-const lastFeatureTopic = ref("");
-
-// 自定义兜底选项标识：下拉选中它时，旁边显示自定义输入框
-const CUSTOM = "__custom__";
-
-// 各功能的子需求表单：课题必填，其余字段用户可自行指定或选「自定义…」兜底
-const featureForms = reactive({
-  plan: {
-    topic: "",
-    lessonType: "新授课",
-    lessonTypeCustom: "",
-    textbook: "人教A版",
-    textbookCustom: "",
-    studentLevel: "普通班",
-    studentLevelCustom: "",
-    examAware: true,
-    requirements: "",
-  },
-  lesson: {
-    topic: "",
-    lessonType: "新授课",
-    lessonTypeCustom: "",
-    textbook: "人教A版",
-    textbookCustom: "",
-    studentLevel: "普通班",
-    studentLevelCustom: "",
-    duration: "1课时",
-    detail: "详案",
-    detailCustom: "",
-    requirements: "",
-  },
-  quiz: {
-    topic: "",
-    purpose: "课堂练习",
-    purposeCustom: "",
-    questionMix: "高考标准",
-    questionMixCustom: "",
-    studentLevel: "普通班",
-    studentLevelCustom: "",
-    difficulty: "中等",
-    count: "8",
-    countCustom: "",
-    examAware: true,
-    requirements: "",
-  },
-});
-
-// 各字段的可选值（供下拉渲染；每个字段都带「自定义…」兜底）
-const FIELD_OPTIONS = {
-  lessonType: ["新授课", "复习课", "习题讲评课", "专题课"],
-  textbook: [
-    "人教A版",
-    "人教B版",
-    "苏教版",
-    "北师大版",
-    "湘教版",
-    "沪教版",
-    "其他",
-  ],
-  studentLevel: ["重点班", "普通班", "基础薄弱"],
-  duration: ["1课时", "2课时", "3课时"],
-  detail: ["详案（公开课/检查用）", "简案（日常用）"],
-  purpose: ["课堂练习", "课后作业", "周测", "月考"],
-  questionMix: ["高考标准（选择+填空+解答）", "全选择题", "全解答题"],
-  difficulty: ["基础", "中等", "综合提升"],
-  count: ["5", "8", "10", "15"],
-};
-
-// 三个功能各自的字段配置（顺序即展示顺序）
-const planFields = [
-  { key: "lessonType", label: "课型" },
-  { key: "textbook", label: "教材版本" },
-  { key: "studentLevel", label: "学生层次" },
-];
-const lessonFields = [
-  { key: "lessonType", label: "课型" },
-  { key: "textbook", label: "教材版本" },
-  { key: "studentLevel", label: "学生层次" },
-  { key: "duration", label: "课时" },
-  { key: "detail", label: "教案详略" },
-];
-const quizFields = [
-  { key: "purpose", label: "用途" },
-  { key: "questionMix", label: "题型分布" },
-  { key: "studentLevel", label: "学生层次" },
-  { key: "difficulty", label: "难度" },
-  { key: "count", label: "题量" },
-];
-// 当前功能要渲染的字段
-const currentFields = computed(() => {
-  if (activeFeature.value === "plan") return planFields;
-  if (activeFeature.value === "lesson") return lessonFields;
-  if (activeFeature.value === "quiz") return quizFields;
-  return [];
-});
-
-// 取某字段的实际值：选中「自定义…」时用旁边的自定义输入，否则用选项值
-function resolveField(form, key) {
-  const v = form[key];
-  if (v === CUSTOM) {
-    return form[key + "Custom"]?.trim() || "（自定义，未填写）";
-  }
-  return v;
-}
-
-// 当前功能的展示信息
-const currentFeature = computed(
-  () => features.find((f) => f.id === activeFeature.value) || null,
-);
-const currentFeatureLabel = computed(() => currentFeature.value?.label || "");
-const currentFeatureDesc = computed(() => currentFeature.value?.hint || "");
-const currentFeatureIcon = computed(() => currentFeature.value?.icon || "");
-const canRunFeature = computed(() => {
-  const form = featureForms[activeFeature.value];
-  return !!form && !!form.topic.trim();
-});
-// 生成中的按钮/提示文案，按功能区分，让用户明确知道正在处理
-const generatingLabel = computed(() => {
-  const labels = {
-    plan: "正在构思…",
-    lesson: "正在编写…",
-    quiz: "正在出题…",
-  };
-  return labels[activeFeature.value] || "正在生成…";
-});
-// 对话历史仅在「通用问答」下展示
-const isGeneral = computed(() => activeFeature.value === "");
-
-// 桥接信息：把当前功能的草稿送入核心功能页生成文件（type 对应 /features）
-const bridgeInfo = computed(() => {
-  const topic = lastFeatureTopic.value;
-  const feat = activeFeature.value;
-  if (!feat || !topic) return null;
-  const map = {
-    plan: { type: "ppt", label: "生成课件", hint: "将构思转为课件" },
-    lesson: { type: "doc", label: "生成教案", hint: "将草稿转为 DOCX 教案" },
-    quiz: { type: "quiz", label: "生成练习", hint: "将题目转为练习卷" },
-  };
-  return map[feat] ? { ...map[feat], topic } : null;
-});
-// 最后一条是 AI 回复时才显示桥接按钮
-const showBridge = computed(() => {
-  const msgs = activeSession.value?.messages ?? [];
-  return (
-    bridgeInfo.value &&
-    msgs.length > 0 &&
-    msgs[msgs.length - 1].role === "assistant"
-  );
-});
-
-// 选择功能：不直接触发 AI，先展示该功能的子需求表单
-function selectFeature(feature) {
-  if (activeFeature.value === feature) {
-    activeFeature.value = "";
-    return;
-  }
-  activeFeature.value = feature;
-  // 切换功能时清除之前的临时会话，保证每次进入定向功能是全新对话
-  assistant.clearEphemeral();
-}
-
-// 填写子需求后生成：把表单信息组装成结构化 prompt 交给 AI
-async function runFeature() {
-  if (isLoading.value) return;
-  const feat = activeFeature.value;
-  const form = featureForms[feat];
-  if (!form || !form.topic.trim()) return;
-  const topic = form.topic.trim();
-  lastFeatureTopic.value = topic;
-
-  // 组装本功能的全部需求字段（含自定义兜底后的实际值）
-  const params = [];
-  if (feat === "plan") {
-    params.push(`课型：${resolveField(form, "lessonType")}`);
-    params.push(`教材版本：${resolveField(form, "textbook")}`);
-    params.push(`学生层次：${resolveField(form, "studentLevel")}`);
-  } else if (feat === "lesson") {
-    params.push(`课型：${resolveField(form, "lessonType")}`);
-    params.push(`教材版本：${resolveField(form, "textbook")}`);
-    params.push(`学生层次：${resolveField(form, "studentLevel")}`);
-    params.push(`课时：${resolveField(form, "duration")}`);
-    params.push(`教案详略：${resolveField(form, "detail")}`);
-  } else if (feat === "quiz") {
-    params.push(`用途：${resolveField(form, "purpose")}`);
-    params.push(`题型分布：${resolveField(form, "questionMix")}`);
-    params.push(`学生层次：${resolveField(form, "studentLevel")}`);
-    params.push(`难度：${resolveField(form, "difficulty")}`);
-    params.push(`题量：${resolveField(form, "count")} 道`);
-  }
-
-  const extra = form.requirements?.trim()
-    ? `\n补充要求：${form.requirements.trim()}`
-    : "";
-  const examNote =
-    feat !== "lesson" && form.examAware
-      ? "\n请在产出中标注高考考频、常考题型与分值（复习/出题场景尤其重要）。"
-      : "";
-
-  let prompt = "";
-  if (feat === "plan") {
-    prompt = `请帮我把课题「${topic}」的这节课构思成一份教学方案。\n${params.join(
-      "；",
-    )}。\n内容须包含：教学目标、教学重难点、课堂导入、教学环节流程（标注时间）、板书设计建议。${examNote}${extra}\n请以清晰的结构输出，便于我参考后直接生成课件。`;
-  } else if (feat === "lesson") {
-    prompt = `请编写课题「${topic}」的完整教案草稿。\n${params.join(
-      "；",
-    )}。\n请按标准教案结构输出（教学目标、教学重难点、教学准备、教学过程并标注时间、板书设计、作业布置）。${extra}`;
-  } else if (feat === "quiz") {
-    prompt = `请围绕课题「${topic}」设计分层练习草稿。\n${params.join(
-      "；",
-    )}。\n按基础/提升/拓展分层，题型含选择、填空、简答，每题附参考答案与考察点。${examNote}${extra}`;
-  }
-  await handleSend(prompt);
-}
-
-// 桥接：把助手产出的草稿送入核心功能页生成真实文件（type=ppt|doc|quiz）
-function goToFeatures(type, topic, content = "") {
-  const query = { type };
-  if (topic) query.topic = topic;
-  // 草稿文本可能很长，放入 sessionStorage 避免超长 URL；
-  // 核心功能页读取后自动预填学科/学段/教学目标/重难点等字段
-  try {
-    if (content) {
-      sessionStorage.setItem(
-        "zhike-features-bridge",
-        JSON.stringify({ type, topic: topic || "", content, ts: Date.now() }),
-      );
-    }
-  } catch {
-    /* ignore */
-  }
-  router.push({ path: "/features", query });
-}
-
-// 取最后一条 AI 回复的完整文本，用于桥接预填核心功能的内容
-const lastAssistantContent = computed(() => {
-  const msgs = activeSession.value?.messages ?? [];
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === "assistant" && msgs[i].content) {
-      return msgs[i].content;
-    }
-  }
-  return "";
-});
-
-// const quickNotes = [
-//   '支持资料',
-//   '适合课件、教案、互动脚本共创',
-//   '会话记录保存在本地浏览器',
-// ]
-
-const groupedSections = computed(() => {
-  const grouped = assistant.groupSessionsByDate(sessions.value);
+function groupSessions(list) {
+  const grouped = assistant.groupSessionsByDate(list);
   return [
     { key: "today", label: "今天", items: grouped.today },
     { key: "yesterday", label: "昨天", items: grouped.yesterday },
     { key: "earlier", label: "更早", items: grouped.earlier },
   ].filter((group) => group.items.length);
-});
-
-function refresh() {
-  // 状态已响应式共享，无需手动同步；若当前无激活会话则自动落到第一个
-  const current = assistant.getActiveSession();
-  if (!current && sessions.value.length) {
-    assistant.setActive(sessions.value[0].id);
-  }
 }
 
-function ensureSessionExists() {
-  if (!assistant.getSessions().length) {
-    assistant.createSession();
+const groupedSections = computed(() => groupSessions(sessions.value));
+
+// 历史检索：标题命中或任一条消息正文命中都算匹配
+const filteredSections = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return groupedSections.value;
+  const matched = sessions.value.filter((s) => {
+    if ((s.title || "").toLowerCase().includes(q)) return true;
+    return (s.messages || []).some((m) =>
+      (m.content || "").toLowerCase().includes(q),
+    );
+  });
+  return groupSessions(matched);
+});
+
+function backHome() {
+  view.value = "home";
+  sidebarOpen.value = false;
+  nextTick(() => landingInput.value?.focus());
+}
+
+// 主页面点「历史记录」：进入对话页；若已有会话但未选中，直接打开最近一条
+function openHistory() {
+  view.value = "chat";
+  if (!activeId.value && sessions.value.length) {
+    assistant.setActive(sessions.value[0].id);
+    scrollToBottom();
   }
-  refresh();
 }
 
 function handleNewChat() {
   assistant.setActive(null);
   inputText.value = "";
+  view.value = "home";
   sidebarOpen.value = false;
+  nextTick(() => landingInput.value?.focus());
 }
 
 function selectSession(id) {
   assistant.setActive(id);
+  view.value = "chat";
   sidebarOpen.value = false;
   scrollToBottom();
 }
 
 function handleDeleteSession(id) {
   assistant.deleteSession(id);
+  // 删完没有会话了，回主页面重新开始
   if (!sessions.value.length) {
-    assistant.createSession();
+    view.value = "home";
   }
-  refresh();
 }
 
 async function handleSend(text = inputText.value) {
@@ -361,25 +115,17 @@ async function handleSend(text = inputText.value) {
 
   inputText.value = "";
   isLoading.value = true;
-  // 立即滚动到消息区，让用户第一时间看到 AI 的打字点反馈
+  // 立刻切到对话页，让用户第一时间看到自己的提问与 AI 打字反馈
+  view.value = "chat";
   scrollToBottom();
 
   try {
-    const isEphemeral = activeFeature.value !== "";
-
-    if (!isEphemeral && !activeId.value) {
+    if (!activeId.value) {
       const session = assistant.createSession();
       activeId.value = session.id;
-    } else if (isEphemeral) {
-      assistant.clearEphemeral();
     }
-
     await assistant.sendMessage(content, {
-      feature: activeFeature.value,
-      ephemeral: isEphemeral,
-      onDelta: () => {
-        scrollToBottom();
-      },
+      onDelta: () => scrollToBottom(),
     });
   } finally {
     isLoading.value = false;
@@ -397,6 +143,7 @@ function scrollToBottom() {
 }
 
 function onKeydown(e) {
+  // 回车发送，Shift+回车换行
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     handleSend();
@@ -495,7 +242,8 @@ function copyMessage(text) {
 }
 
 function regenerate(msg) {
-  const msgs = activeSession.value.messages;
+  const msgs = activeSession.value?.messages;
+  if (!msgs) return;
   const idx = msgs.indexOf(msg);
   for (let i = idx - 1; i >= 0; i--) {
     if (msgs[i].role === "user") {
@@ -512,7 +260,6 @@ function rateMessage(msg, type) {
 
 function togglePin(id) {
   assistant.pinSession(id);
-  refresh();
 }
 
 function handleInternalLink(e) {
@@ -525,16 +272,9 @@ function handleInternalLink(e) {
 }
 
 onMounted(() => {
-  // 进入页面先显示欢迎页，不自动加载历史会话
-  activeId.value = null;
-  document.addEventListener("click", (e) => {
-    const link = e.target.closest(".internal-link");
-    if (link) {
-      e.preventDefault();
-      const path = link.getAttribute("data-path");
-      if (path) router.push(path);
-    }
-  });
+  // 进入页面先给主页面，不自动加载历史会话
+  assistant.setActive(null);
+  nextTick(() => landingInput.value?.focus());
 });
 
 watch(activeId, scrollToBottom);
@@ -542,88 +282,10 @@ watch(activeId, scrollToBottom);
 
 <template>
   <div class="assistant-page">
-    <nav class="feature-nav" aria-label="备课功能导航">
-      <div class="feature-nav__head">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15z"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <path
-            d="M20 17v5H6.5A2.5 2.5 0 0 1 4 19.5"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-        <span>AI 备课</span>
-      </div>
-
-      <button
-        class="feature-nav__item feature-nav__item--home"
-        @click="router.push('/')"
-      >
-        <span class="feature-nav__icon">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 0 0 1 1h3m10-11l2 2m-2-2v10a1 1 0 0 1-1 1h-3m-6 0a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1m-6 0h6"
-            />
-          </svg>
-        </span>
-        <span class="feature-nav__label">返回主页</span>
-      </button>
-
-      <div class="feature-nav__divider" />
-
-      <button
-        class="feature-nav__item"
-        :class="{ 'feature-nav__item--active': isGeneral }"
-        @click="selectFeature('')"
-        title="自由对话，对话历史在此展示"
-      >
-        <span class="feature-nav__icon" v-html="chatIcon"></span>
-        <span class="feature-nav__label">通用问答</span>
-      </button>
-
-      <div class="feature-nav__divider" />
-
-      <button
-        v-for="f in features"
-        :key="f.id"
-        class="feature-nav__item"
-        :class="{ 'feature-nav__item--active': activeFeature === f.id }"
-        @click="selectFeature(f.id)"
-        :title="f.hint"
-      >
-        <span class="feature-nav__icon" v-html="f.icon"></span>
-        <span class="feature-nav__label">{{ f.label }}</span>
-      </button>
-    </nav>
-
-    <aside
-      v-if="isGeneral"
-      class="assistant-sidebar"
-      :class="{ 'assistant-sidebar--open': sidebarOpen }"
-    >
-      <div class="assistant-sidebar__top">
-        <RouterLink
-          to="/"
-          class="icon-btn icon-btn--soft"
-          title="返回首页"
-          aria-label="返回首页"
-          @click="sidebarOpen = false"
-        >
+    <!-- ══════════════ 主页面（DeepSeek 式提问入口） ══════════════ -->
+    <div v-if="view === 'home'" class="landing">
+      <header class="landing__bar">
+        <RouterLink to="/" class="ghost-btn" title="返回主页">
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <path
               d="M12 4l-6 6 6 6"
@@ -633,132 +295,249 @@ watch(activeId, scrollToBottom);
               stroke-linejoin="round"
             />
           </svg>
+          返回主页
         </RouterLink>
-        <button class="new-chat-btn" @click="handleNewChat">
-          <svg viewBox="0 0 20 20" fill="none">
-            <path
-              d="M10 4v12M4 10h12"
+
+        <button class="ghost-btn" @click="openHistory">
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle
+              cx="10"
+              cy="10"
+              r="7.4"
               stroke="currentColor"
-              stroke-width="1.7"
+              stroke-width="1.5"
+            />
+            <path
+              d="M10 6v4.2l3 1.8"
+              stroke="currentColor"
+              stroke-width="1.5"
               stroke-linecap="round"
             />
           </svg>
-          新对话
+          历史记录
+          <span v-if="sessions.length" class="ghost-btn__count">{{
+            sessions.length
+          }}</span>
         </button>
-      </div>
+      </header>
 
-      <div v-if="isGeneral" class="sidebar-search">
-        <svg
-          class="sidebar-search__icon"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-        >
-          <circle cx="11" cy="11" r="8" />
-          <path d="M21 21l-4.35-4.35" />
-        </svg>
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="搜索对话…"
-          aria-label="搜索对话历史"
-          autocomplete="off"
-          name="assistant-search"
-          class="sidebar-search__input"
-        />
-      </div>
+      <div class="landing__body">
+        <div class="landing__brand">
+          <span class="landing__logo">
+            <svg viewBox="0 0 40 40" fill="none" aria-hidden="true">
+              <rect width="40" height="40" rx="10" fill="url(#landing-ai-g)" />
+              <path
+                d="M12 11c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v16c0 .55-.45 1-1 1H13c-.55 0-1-.45-1-1V11z"
+                fill="rgba(255,255,255,0.9)"
+              />
+              <path
+                d="M20 11c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v16c0 .55-.45 1-1 1h-6c-.55 0-1-.45-1-1V11z"
+                fill="rgba(255,255,255,0.55)"
+              />
+              <rect
+                x="19"
+                y="11"
+                width="2"
+                height="16"
+                rx="0.5"
+                fill="rgba(255,255,255,0.2)"
+              />
+              <circle cx="31" cy="11" r="3" fill="#FDE68A" />
+              <defs>
+                <linearGradient
+                  id="landing-ai-g"
+                  x1="0"
+                  y1="0"
+                  x2="40"
+                  y2="40"
+                >
+                  <stop stop-color="#2563EB" />
+                  <stop stop-color="#1D4ED8" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </span>
+          <h1 class="landing__title">教师 AI 助手</h1>
+          <p class="landing__desc">
+            面向中小学教师的专业问答助手。聊的是课标、教材、课堂与学生，
+            不闲聊、不跑题，给的是明天能直接用的教学建议。
+          </p>
+        </div>
 
-      <div v-if="isGeneral" class="assistant-sidebar__history">
-        <section
-          v-for="group in groupedSections"
-          :key="group.key"
-          class="history-group"
-        >
-          <p class="history-label">{{ group.label }}</p>
-
-          <div
-            v-for="session in group.items"
-            :key="session.id"
-            class="history-row"
-            :class="{ 'history-row--active': session.id === activeId }"
+        <div class="composer composer--lg">
+          <textarea
+            ref="landingInput"
+            v-model="inputText"
+            class="composer__input"
+            rows="1"
+            placeholder="向 AI 助教提问，例如：这节课的重难点该怎么确定？"
+            aria-label="向 AI 助教提问"
+            name="assistant-query-home"
+            :disabled="isLoading"
+            @keydown="onKeydown"
+          ></textarea>
+          <button
+            class="send-btn"
+            :disabled="!inputText.trim() || isLoading"
+            aria-label="发送问题"
+            @click="handleSend()"
           >
-            <button class="history-item" @click="selectSession(session.id)">
-              <span class="history-item__icon">
-                <svg viewBox="0 0 20 20" fill="none">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M4 10l12-6-2 6 2 6-12-6z" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="chips">
+          <button
+            v-for="s in SUGGESTIONS"
+            :key="s"
+            class="chip"
+            @click="handleSend(s)"
+          >
+            {{ s }}
+          </button>
+        </div>
+
+        <p class="landing__foot">
+          <span>对话由</span>
+          <AiBadge name="qwen" size="sm" />
+          <span>驱动 · 记录仅保存在本地浏览器</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- ══════════════ 对话页（左历史 + 中问答） ══════════════ -->
+    <div v-else class="chat-layout" @click="handleInternalLink">
+      <aside class="sidebar" :class="{ 'sidebar--open': sidebarOpen }">
+        <div class="sidebar__top">
+          <button class="new-chat-btn" @click="handleNewChat">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path
+                d="M10 4v12M4 10h12"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              />
+            </svg>
+            新对话
+          </button>
+          <RouterLink to="/" class="icon-btn" title="返回主页" aria-label="返回主页">
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path
+                d="M3 10l7-6 7 6M5 9v6.5h10V9"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </RouterLink>
+        </div>
+
+        <div class="sidebar-search">
+          <svg
+            class="sidebar-search__icon"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+          </svg>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索历史对话…"
+            aria-label="搜索历史对话"
+            autocomplete="off"
+            name="assistant-search"
+            class="sidebar-search__input"
+          />
+        </div>
+
+        <div class="sidebar__history">
+          <section
+            v-for="group in filteredSections"
+            :key="group.key"
+            class="history-group"
+          >
+            <p class="history-label">{{ group.label }}</p>
+
+            <div
+              v-for="session in group.items"
+              :key="session.id"
+              class="history-row"
+              :class="{ 'history-row--active': session.id === activeId }"
+            >
+              <button class="history-item" @click="selectSession(session.id)">
+                <span class="history-item__icon">
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H9l-3 3v-3H7a3 3 0 0 1-3-3V6z"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                    />
+                  </svg>
+                </span>
+                <span class="history-item__content">
+                  <strong>{{ session.title }}</strong>
+                  <small>{{ formatSessionTime(session.updatedAt) }}</small>
+                </span>
+              </button>
+
+              <button
+                class="history-pin"
+                title="置顶/取消置顶"
+                aria-label="置顶或取消置顶"
+                @click.stop="togglePin(session.id)"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  :stroke="session.isPinned ? '#2563eb' : 'currentColor'"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
                   <path
-                    d="M4 6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H9l-3 3v-3H7a3 3 0 0 1-3-3V6z"
-                    stroke="currentColor"
-                    stroke-width="1.4"
+                    d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z"
                   />
                 </svg>
-              </span>
-              <span class="history-item__content">
-                <strong>{{ session.title }}</strong>
-                <small>{{ formatSessionTime(session.updatedAt) }}</small>
-              </span>
-            </button>
+              </button>
 
-            <button
-              class="history-pin"
-              title="置顶/取消置顶"
-              aria-label="置顶/取消置顶"
-              @click.stop="togglePin(session.id)"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                :stroke="session.isPinned ? '#4d98f4' : 'currentColor'"
-                stroke-width="2"
-                stroke-linecap="round"
-                aria-hidden="true"
+              <button
+                class="history-delete"
+                title="删除对话"
+                aria-label="删除对话"
+                @click.stop="handleDeleteSession(session.id)"
               >
-                <path
-                  d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z"
-                />
-              </svg>
-            </button>
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path
+                    d="M6 6l8 8M14 6l-8 8"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </section>
 
-            <button
-              class="history-delete"
-              title="删除会话"
-              aria-label="删除会话"
-              @click.stop="handleDeleteSession(session.id)"
-            >
-              <svg viewBox="0 0 20 20" fill="none">
-                <path
-                  d="M6 6l8 8M14 6l-8 8"
-                  stroke="currentColor"
-                  stroke-width="1.6"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </button>
-          </div>
-        </section>
-      </div>
+          <p v-if="!filteredSections.length" class="sidebar__empty">
+            {{ sessions.length ? "没有匹配的对话" : "还没有对话记录" }}
+          </p>
+        </div>
 
-      <div class="assistant-sidebar__foot">
-        <RouterLink to="/" class="home-btn" @click="sidebarOpen = false">
-          <svg viewBox="0 0 20 20" fill="none">
-            <path
-              d="M12 4l-6 6 6 6"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-          返回首页
-        </RouterLink>
-
-        <p class="assistant-sidebar__hint">
-          <svg viewBox="0 0 16 16" fill="none">
+        <div class="sidebar__foot">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path
               d="M8 1L2 4v4c0 3.3 2.6 6.4 6 7 3.4-.6 6-3.7 6-7V4L8 1z"
               stroke="currentColor"
@@ -766,288 +545,38 @@ watch(activeId, scrollToBottom);
             />
           </svg>
           对话记录仅保存在本地
-        </p>
-      </div>
-    </aside>
+        </div>
+      </aside>
 
-    <div
-      v-if="sidebarOpen && isGeneral"
-      class="sidebar-overlay"
-      @click="sidebarOpen = false"
-    />
+      <div
+        v-if="sidebarOpen"
+        class="sidebar-overlay"
+        @click="sidebarOpen = false"
+      />
 
-    <main class="assistant-main">
-      <header class="assistant-mobile-bar">
-        <button
-          class="icon-btn icon-btn--soft"
-          aria-label="打开侧边栏"
-          @click="sidebarOpen = true"
-        >
-          <svg viewBox="0 0 20 20" fill="none">
-            <path
-              d="M3 5h14M3 10h14M3 15h14"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
-        <span class="assistant-mobile-bar__title">知课 AI 备课助手</span>
-        <AiBadge name="qwen" size="sm" />
-      </header>
-
-      <div class="mode-bar">
-        <button
-          class="mode-btn"
-          :class="{ 'mode-btn--active': isGeneral }"
-          @click="selectFeature('')"
-        >
-          <span
-            class="mode-btn__icon"
-            aria-hidden="true"
-            v-html="chatIcon"
-          ></span>
-          <span class="mode-btn__label">通用问答</span>
-        </button>
-        <button
-          v-for="f in features"
-          :key="f.id"
-          class="mode-btn"
-          :class="{ 'mode-btn--active': activeFeature === f.id }"
-          @click="selectFeature(f.id)"
-        >
-          <span
-            class="mode-btn__icon"
-            aria-hidden="true"
-            v-html="f.icon"
-          ></span>
-          <span class="mode-btn__label">{{ f.label }}</span>
-        </button>
-        <button class="mode-btn mode-btn--home" @click="router.push('/')">
-          <span class="mode-btn__icon" aria-hidden="true">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 0 0 1 1h3m10-11l2 2m-2-2v10a1 1 0 0 1-1 1h-3m-6 0a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1m-6 0h6"
-              />
-            </svg>
-          </span>
-          <span class="mode-btn__label">主页</span>
-        </button>
-      </div>
-
-      <div class="assistant-shell" @click="handleInternalLink">
-        <!-- 子需求选择栏：非通用功能时展示，填好指定信息后再触发 AI -->
-        <div v-if="activeFeature" class="feature-panel">
-          <div class="feature-panel__head">
-            <span
-              class="feature-panel__icon"
-              aria-hidden="true"
-              v-html="currentFeatureIcon"
-            ></span>
-            <strong class="feature-panel__title">
-              {{ currentFeatureLabel }}
-            </strong>
-            <span class="feature-panel__desc">{{ currentFeatureDesc }}</span>
-            <button
-              class="feature-panel__close"
-              title="关闭并返回通用问答"
-              @click="selectFeature('')"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              >
-                <path d="M6 6l12 12M18 6L6 18" />
-              </svg>
-            </button>
-          </div>
-
-          <div class="feature-panel__form">
-            <label class="fp-field fp-field--grow">
-              <span class="fp-field__label">课题</span>
-              <input
-                class="fp-field__input"
-                v-model="featureForms[activeFeature].topic"
-                placeholder="请输入课题，如：函数的单调性…"
-                @keyup.enter="runFeature()"
-              />
-            </label>
-
-            <div class="fp-field--row">
-              <template v-for="field in currentFields" :key="field.key">
-                <label class="fp-field">
-                  <span class="fp-field__label">{{ field.label }}</span>
-                  <select
-                    class="fp-field__select"
-                    v-model="featureForms[activeFeature][field.key]"
-                  >
-                    <option
-                      v-for="opt in FIELD_OPTIONS[field.key]"
-                      :key="opt"
-                      :value="opt"
-                    >
-                      {{ opt }}
-                    </option>
-                    <option :value="CUSTOM">自定义…</option>
-                  </select>
-                  <input
-                    v-if="featureForms[activeFeature][field.key] === CUSTOM"
-                    class="fp-field__input fp-field__input--custom"
-                    v-model="featureForms[activeFeature][field.key + 'Custom']"
-                    :placeholder="'自定义' + field.label"
-                  />
-                </label>
-              </template>
-
-              <label
-                v-if="activeFeature !== 'lesson'"
-                class="fp-field fp-field--switch"
-              >
-                <span class="fp-field__label">高考考点标注</span>
-                <div class="fp-switch">
-                  <button
-                    type="button"
-                    class="fp-switch__opt"
-                    :class="{
-                      'fp-switch__opt--on':
-                        featureForms[activeFeature].examAware,
-                    }"
-                    @click="featureForms[activeFeature].examAware = true"
-                  >
-                    标注
-                  </button>
-                  <button
-                    type="button"
-                    class="fp-switch__opt"
-                    :class="{
-                      'fp-switch__opt--on':
-                        !featureForms[activeFeature].examAware,
-                    }"
-                    @click="featureForms[activeFeature].examAware = false"
-                  >
-                    不标
-                  </button>
-                </div>
-              </label>
-
-              <label class="fp-field fp-field--grow">
-                <span class="fp-field__label">补充要求（可选）</span>
-                <input
-                  class="fp-field__input"
-                  v-model="featureForms[activeFeature].requirements"
-                  placeholder="如：重点讲情境导入 / 用生活案例举例…"
-                />
-              </label>
-            </div>
-          </div>
-
+      <main class="conversation">
+        <header class="conversation__bar">
           <button
-            class="feature-panel__submit"
-            :class="{ 'feature-panel__submit--loading': isLoading }"
-            :disabled="!canRunFeature || isLoading"
-            @click="runFeature()"
+            class="icon-btn icon-btn--drawer"
+            aria-label="打开历史记录"
+            @click="sidebarOpen = true"
           >
-            <span
-              v-if="isLoading"
-              class="feature-panel__spinner"
-              aria-hidden="true"
-            ></span>
-            <svg
-              v-else
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z" />
-              <path d="M9 12l2 2 4-4" />
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path
+                d="M3 5h14M3 10h14M3 15h14"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
             </svg>
-            {{ isLoading ? generatingLabel : "开始生成" }}
           </button>
+          <span class="conversation__title">{{
+            activeSession?.title || "新对话"
+          }}</span>
+          <AiBadge name="qwen" size="sm" />
+        </header>
 
-          <div v-if="isLoading" class="feature-panel__status" role="status">
-            <span class="feature-panel__status-dots" aria-hidden="true"
-              ><span /><span /><span
-            /></span>
-            AI 正在生成，教案/出题内容较长时可能需要 1~2 分钟，请稍候…
-          </div>
-        </div>
-
-        <div v-if="!hasMessages && !isLoading && isGeneral" class="welcome">
-          <div class="welcome__brand">
-            <div class="welcome__logo">
-              <span class="welcome__logo-icon">
-                <svg
-                  viewBox="0 0 40 40"
-                  fill="none"
-                  aria-hidden="true"
-                  width="40"
-                  height="40"
-                >
-                  <rect
-                    width="40"
-                    height="40"
-                    rx="10"
-                    fill="url(#welcome-ai-g)"
-                  />
-                  <path
-                    d="M12 11c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v16c0 .55-.45 1-1 1H13c-.55 0-1-.45-1-1V11z"
-                    fill="rgba(255,255,255,0.9)"
-                  />
-                  <path
-                    d="M20 11c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v16c0 .55-.45 1-1 1h-6c-.55 0-1-.45-1-1V11z"
-                    fill="rgba(255,255,255,0.55)"
-                  />
-                  <rect
-                    x="19"
-                    y="11"
-                    width="2"
-                    height="16"
-                    rx="0.5"
-                    fill="rgba(255,255,255,0.2)"
-                  />
-                  <circle cx="31" cy="11" r="3" fill="#FDE68A" />
-                  <defs>
-                    <linearGradient
-                      id="welcome-ai-g"
-                      x1="0"
-                      y1="0"
-                      x2="40"
-                      y2="40"
-                    >
-                      <stop stop-color="#2563EB" />
-                      <stop stop-color="#1D4ED8" />
-                    </linearGradient>
-                  </defs>
-                </svg>
-              </span>
-            </div>
-
-            <h1 class="welcome__title">知课 AI 备课助手</h1>
-            <p class="welcome__desc">
-              帮你把备课想法理清楚：选择左侧「备课构思」「教案草稿」「出题草稿」，填写课题后一键生成内容草稿，满意后还可「转入生成」落地成真实文件；「通用问答」可自由对话。
-            </p>
-            <p class="welcome__power">
-              <span class="welcome__power-label">对话由</span>
-              <AiBadge name="qwen" />
-              <span class="welcome__power-label">驱动</span>
-            </p>
-          </div>
-        </div>
-
-        <div v-else ref="messagesEl" class="messages">
+        <div v-if="hasMessages" ref="messagesEl" class="messages">
           <div
             v-for="(msg, index) in activeSession?.messages"
             :key="msg.id"
@@ -1122,6 +651,7 @@ watch(activeId, scrollToBottom);
                 />
               </svg>
             </div>
+
             <div
               class="message__bubble"
               :class="{
@@ -1140,6 +670,7 @@ watch(activeId, scrollToBottom);
               </div>
               <template v-else><span /><span /><span /></template>
             </div>
+
             <div
               v-if="msg.role === 'assistant' && msg.content"
               class="message__actions"
@@ -1147,7 +678,7 @@ watch(activeId, scrollToBottom);
               <button
                 class="msg-action"
                 title="复制"
-                aria-label="复制消息"
+                aria-label="复制回答"
                 @click="copyMessage(msg.content)"
               >
                 <svg
@@ -1167,11 +698,11 @@ watch(activeId, scrollToBottom);
                 </svg>
               </button>
               <button
+                v-if="index === activeSession.messages.length - 1"
                 class="msg-action"
                 title="重新生成"
                 aria-label="重新生成回答"
                 @click="regenerate(msg)"
-                v-if="index === activeSession.messages.length - 1"
               >
                 <svg
                   width="14"
@@ -1190,6 +721,7 @@ watch(activeId, scrollToBottom);
               <span class="msg-action-divider"></span>
               <button
                 class="msg-action"
+                :class="{ 'msg-action--on': msg.rated === 'up' }"
                 title="有帮助"
                 aria-label="评价有帮助"
                 @click="rateMessage(msg, 'up')"
@@ -1211,6 +743,7 @@ watch(activeId, scrollToBottom);
               </button>
               <button
                 class="msg-action"
+                :class="{ 'msg-action--on': msg.rated === 'down' }"
                 title="需改进"
                 aria-label="评价需改进"
                 @click="rateMessage(msg, 'down')"
@@ -1234,109 +767,46 @@ watch(activeId, scrollToBottom);
           </div>
         </div>
 
-        <!-- 桥接：把助手草稿送入核心功能页生成真实文件 -->
-        <div v-if="showBridge" class="bridge-bar">
-          <div class="bridge-bar__text">
-            <strong>{{ currentFeatureLabel }}已生成</strong>
-            <span>满意的话，可一键转入核心功能生成真实文件</span>
-          </div>
-          <button
-            class="bridge-bar__btn"
-            @click="
-              goToFeatures(
-                bridgeInfo.type,
-                bridgeInfo.topic,
-                lastAssistantContent,
-              )
-            "
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M7 17L17 7" />
-              <path d="M8 7h9v9" />
-            </svg>
-            {{ bridgeInfo.label }}
-          </button>
+        <div v-else class="conversation__empty">
+          <p>还没有对话内容</p>
+          <button class="empty-action" @click="backHome">开始提问</button>
         </div>
 
         <div class="input-area">
-          <div
-            v-if="activeFeature"
-            class="mode-indicator"
-            :title="currentFeatureDesc"
-          >
-            <span
-              class="mode-indicator__icon"
-              v-html="currentFeatureIcon"
-            ></span>
-            <span class="mode-indicator__label">
-              当前功能：{{ currentFeatureLabel }} —— {{ currentFeatureDesc }}
-            </span>
-            <button
-              class="mode-indicator__clear"
-              title="返回通用问答"
-              aria-label="返回通用问答"
-              @click="selectFeature('')"
-            >
-              <svg viewBox="0 0 16 16" fill="none">
-                <path
-                  d="M4 4l8 8M12 4l-8 8"
-                  stroke="currentColor"
-                  stroke-width="1.6"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </button>
-          </div>
-
-          <div class="input-wrap">
-            <input
+          <div class="composer">
+            <textarea
               v-model="inputText"
-              type="text"
-              placeholder="输入问题…"
-              aria-label="输入您的问题"
-              autocomplete="off"
+              class="composer__input"
+              rows="1"
+              placeholder="继续追问…"
+              aria-label="继续追问"
               name="assistant-query"
               :disabled="isLoading"
               @keydown="onKeydown"
-            />
+            ></textarea>
             <button
               class="send-btn"
               :disabled="!inputText.trim() || isLoading"
               aria-label="发送消息"
               @click="handleSend()"
             >
-              <svg viewBox="0 0 20 20" fill="none">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
                 <path d="M4 10l12-6-2 6 2 6-12-6z" fill="currentColor" />
               </svg>
             </button>
           </div>
-
           <p class="input-hint">
-            <svg viewBox="0 0 16 16" fill="none">
-              <path
-                d="M8 1L2 4v4c0 3.3 2.6 6.4 6 7 3.4-.6 6-3.7 6-7V4L8 1z"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
-            </svg>
-            对话内容仅保存在本地浏览器
+            AI 也会出错，重要教学内容请结合课标与教材核验
           </p>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
 /* ═══════════════════════════════════════════════
-   Design Tokens & Page Shell
+   Design Tokens & Shell
    ═══════════════════════════════════════════════ */
 .assistant-page {
   --accent-blue: #2563eb;
@@ -1346,14 +816,18 @@ watch(activeId, scrollToBottom);
   --ink-soft: #4a4a4a;
   --ink-muted: #6b7280;
   --ink-faint: #9ca3af;
+  --border: rgba(0, 0, 0, 0.09);
   --border-subtle: rgba(0, 0, 0, 0.07);
   --radius: 10px;
   --radius-sm: 8px;
+  --radius-md: 12px;
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: #f7f5f2;
   color: #1a1a1a;
   font-family:
@@ -1366,25 +840,251 @@ watch(activeId, scrollToBottom);
 }
 
 /* ═══════════════════════════════════════════════
-   Sidebar
+   Landing（主页面）
    ═══════════════════════════════════════════════ */
-.assistant-sidebar {
-  width: 300px;
+.landing {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.landing__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 24px;
+}
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.ghost-btn:hover {
+  color: var(--ink);
+  background: #ffffff;
+  border-color: var(--border-subtle);
+}
+
+.ghost-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ghost-btn__count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent-blue);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.landing__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 24px 24px 72px;
+}
+
+.landing__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.landing__logo svg {
+  display: block;
+  width: 52px;
+  height: 52px;
+}
+
+.landing__title {
+  margin-top: 16px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.45rem, 2.6vw, 1.85rem);
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.landing__desc {
+  margin-top: 10px;
+  max-width: 420px;
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  text-wrap: balance;
+}
+
+/* ═══════════════════════════════════════════════
+   Composer（输入框，主页与对话页共用）
+   ═══════════════════════════════════════════════ */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.composer--lg {
+  max-width: 620px;
+  padding: 10px 10px 10px 18px;
+  border-radius: 18px;
+}
+
+.composer:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.composer__input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 8px 0;
+  font-size: 0.94rem;
+  line-height: 1.55;
+  color: var(--ink);
+  font-family: inherit;
+  resize: none;
+  field-sizing: content;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.composer__input::placeholder {
+  color: var(--ink-faint);
+}
+
+.composer__input:disabled {
+  opacity: 0.55;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 620px;
+}
+
+.chip {
+  padding: 8px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.15s ease;
+}
+
+.chip:hover {
+  color: var(--accent-blue);
+  border-color: rgba(37, 99, 235, 0.35);
+  transform: translateY(-1px);
+}
+
+.landing__foot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* ═══════════════════════════════════════════════
+   Chat Layout
+   ═══════════════════════════════════════════════ */
+.chat-layout {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* ---- Sidebar ---- */
+.sidebar {
+  width: 288px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: 20px 16px;
+  padding: 16px 14px;
   background: #ffffff;
   border-right: 1px solid var(--border-subtle);
 }
 
-.assistant-sidebar__top {
+.sidebar__top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 14px;
+}
+
+.new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.new-chat-btn:hover {
+  background: var(--accent-blue-dark);
+  box-shadow: 0 1px 6px rgba(37, 99, 235, 0.28);
+}
+
+.new-chat-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .icon-btn {
@@ -1395,18 +1095,16 @@ watch(activeId, scrollToBottom);
   height: 34px;
   border-radius: var(--radius-sm);
   border: none;
+  background: #f3f4f6;
   color: var(--ink-faint);
   text-decoration: none;
   cursor: pointer;
   transition: background 0.2s ease;
 }
 
-.icon-btn--soft {
-  background: #f3f4f6;
-}
-
 .icon-btn:hover {
   background: #e5e7eb;
+  color: var(--ink-soft);
 }
 
 .icon-btn svg {
@@ -1414,36 +1112,48 @@ watch(activeId, scrollToBottom);
   height: 16px;
 }
 
-.new-chat-btn {
-  display: inline-flex;
+.icon-btn--drawer {
+  display: none;
+}
+
+.sidebar-search {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  border: none;
+  padding: 7px 11px;
   border-radius: var(--radius-sm);
-  background: var(--accent-blue);
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    box-shadow 0.2s ease;
+  background: #f3f4f6;
+  transition: background 0.2s ease;
 }
 
-.new-chat-btn:hover {
-  background: var(--accent-blue-dark);
-  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.25);
+.sidebar-search:focus-within {
+  background: #e9ebef;
 }
 
-.new-chat-btn svg {
-  width: 14px;
-  height: 14px;
+.sidebar-search__icon {
+  flex-shrink: 0;
+  color: var(--ink-faint);
 }
 
-.assistant-sidebar__history {
+.sidebar-search__input {
   flex: 1;
-  padding: 16px 0;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  font-family: inherit;
+}
+
+.sidebar-search__input::placeholder {
+  color: var(--ink-faint);
+}
+
+.sidebar__history {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 0;
   overflow-y: auto;
 }
 
@@ -1456,13 +1166,12 @@ watch(activeId, scrollToBottom);
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
   color: var(--ink-faint);
   letter-spacing: 0.04em;
 }
 
-.history-label::before,
 .history-label::after {
   content: "";
   flex: 1;
@@ -1602,717 +1311,100 @@ watch(activeId, scrollToBottom);
   height: 14px;
 }
 
-.assistant-sidebar__foot {
-  padding-top: 16px;
-  border-top: 1px solid var(--border-subtle);
+.sidebar__empty {
+  padding: 18px 10px;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  text-align: center;
 }
 
-.home-btn {
-  display: none;
-}
-
-.assistant-sidebar__hint {
+.sidebar__foot {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
   font-size: 0.7rem;
   color: var(--ink-faint);
 }
 
-.assistant-sidebar__hint svg {
+.sidebar__foot svg {
   width: 12px;
   height: 12px;
 }
 
-/* ---- Sidebar Search ---- */
-.sidebar-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 12px 0 2px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  background: #f3f4f6;
-  transition: background 0.2s ease;
-}
-
-.sidebar-search:focus-within {
-  background: #e5e7eb;
-}
-
-.sidebar-search__icon {
-  flex-shrink: 0;
-  color: var(--ink-faint);
-}
-
-.sidebar-search__input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 0.82rem;
-  color: var(--ink-soft);
-  font-family: inherit;
-}
-
-.sidebar-search__input::placeholder {
-  color: var(--ink-faint);
-}
-
 /* ═══════════════════════════════════════════════
-   Main Area
+   Conversation（中间问答区）
    ═══════════════════════════════════════════════ */
-.assistant-main {
+.conversation {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 20px 24px;
+  background: #f7f5f2;
 }
 
-.assistant-mobile-bar {
-  display: none;
+.conversation__bar {
+  display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(6px);
 }
 
-.assistant-mobile-bar__title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--ink);
-}
-
-.assistant-shell {
+.conversation__title {
   flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: #ffffff;
-  border-radius: 14px;
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
-}
-
-/* ═══════════════════════════════════════════════
-   备课功能竖向导航（页面左端）
-   ═══════════════════════════════════════════════ */
-.feature-nav {
-  width: 176px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 12px;
-  background: #ffffff;
-  border-right: 1px solid var(--border-subtle);
-  gap: 2px;
-}
-
-.feature-nav__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 10px 14px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--ink);
-}
-
-.feature-nav__head svg {
-  width: 16px;
-  height: 16px;
-  color: var(--accent-blue);
-}
-
-.feature-nav__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 10px;
-  border: none;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--ink-soft);
-  font-size: 0.84rem;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  font-family: inherit;
-  transition:
-    color 0.2s ease,
-    background 0.2s ease;
-}
-
-.feature-nav__item:hover {
-  color: var(--accent-blue);
-  background: #f5f7fb;
-}
-
-.feature-nav__item--active {
-  color: var(--accent-blue);
-  background: rgba(37, 99, 235, 0.08);
-  font-weight: 600;
-}
-
-.feature-nav__item:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px #ffffff,
-    0 0 0 4px var(--accent-blue);
-}
-.feature-nav__item--home {
-  margin-bottom: 2px;
-  background: #f0f4ff;
-  border: 1px solid #d6e2ff;
-  border-radius: 9px;
-  color: #3b5fc2;
-  font-weight: 600;
-}
-.feature-nav__item--home:hover {
-  color: #1e40af;
-  background: #dbe5ff;
-}
-
-.feature-nav__icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-}
-
-.feature-nav__icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.feature-nav__label {
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.feature-nav__divider {
-  height: 1px;
-  margin: 8px 10px;
-  background: var(--border-subtle);
-}
-
-/* ═══════════════════════════════════════════════
-   Mode Bar（仅移动端横向兜底）
-   ═══════════════════════════════════════════════ */
-.mode-bar {
-  display: none;
-  gap: 2px;
-  padding: 12px 20px 0;
-  border-bottom: 1px solid var(--border-subtle);
-  background: #ffffff;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.mode-bar::-webkit-scrollbar {
-  display: none;
-}
-
-/* ═══════════════════════════════════════════════
-   子需求选择栏（非通用功能时展示）
-   ═══════════════════════════════════════════════ */
-.feature-panel {
-  margin: 16px 20px 0;
-  padding: 16px 18px 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: linear-gradient(180deg, #fbfdff, #f7fafc);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}
-
-.feature-panel__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.feature-panel__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-  background: rgba(37, 99, 235, 0.1);
-  color: var(--accent-blue);
-}
-
-.feature-panel__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.feature-panel__title {
-  font-size: 0.94rem;
-  color: var(--ink);
-}
-
-.feature-panel__desc {
-  font-size: 0.78rem;
-  color: var(--ink-faint);
-}
-
-.feature-panel__close {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--ink-faint);
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    color 0.2s ease;
-}
-
-.feature-panel__close svg {
-  width: 15px;
-  height: 15px;
-}
-
-.feature-panel__close:hover {
-  background: rgba(15, 23, 42, 0.06);
-  color: var(--ink);
-}
-
-.feature-panel__form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.fp-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.fp-field--grow {
-  flex: 1 1 100%;
-}
-
-.fp-field--row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.fp-field--row .fp-field {
-  flex: 1 1 120px;
-  max-width: 200px;
-}
-
-.fp-field__label {
-  font-size: 0.74rem;
-  font-weight: 600;
-  color: var(--ink-soft);
-}
-
-.fp-field__input,
-.fp-field__select {
-  width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: #ffffff;
-  color: var(--ink);
-  font-size: 0.86rem;
-  font-family: inherit;
-  outline: none;
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.fp-field__input:focus,
-.fp-field__select:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-}
-
-/* 自定义兜底：选「自定义…」后出现的输入框 */
-.fp-field__input--custom {
-  margin-top: 6px;
-  padding: 7px 10px;
-  font-size: 0.8rem;
-  border-color: rgba(37, 99, 235, 0.35);
-  background: #f8fbff;
-}
-
-/* 高考考点标注开关 */
-.fp-switch {
-  display: flex;
-  gap: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.fp-switch__opt {
-  flex: 1;
-  padding: 9px 12px;
-  border: none;
-  background: #ffffff;
-  color: var(--ink-faint);
-  font-size: 0.82rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    color 0.2s ease;
-}
-
-.fp-switch__opt + .fp-switch__opt {
-  border-left: 1px solid var(--border-subtle);
-}
-
-.fp-switch__opt--on {
-  background: rgba(37, 99, 235, 0.08);
-  color: var(--accent-blue);
-  font-weight: 600;
-}
-
-.fp-switch__opt:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px var(--accent-blue);
-}
-
-.feature-panel__submit {
-  margin-top: 16px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 20px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: var(--accent-blue);
-  color: #ffffff;
-  font-size: 0.88rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    transform 0.15s ease;
-}
-
-.feature-panel__submit svg {
-  width: 16px;
-  height: 16px;
-}
-
-.feature-panel__submit:hover:not(:disabled) {
-  background: #1d4ed8;
-  transform: translateY(-1px);
-}
-
-.feature-panel__submit:disabled {
-  background: #c3d3ee;
-  cursor: not-allowed;
-}
-
-.feature-panel__submit--loading {
-  background: #3b82f6;
-  cursor: progress;
-}
-.feature-panel__submit--loading:disabled {
-  background: #3b82f6;
-  cursor: progress;
-}
-
-.feature-panel__spinner {
-  width: 15px;
-  height: 15px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #ffffff;
-  border-radius: 50%;
-  animation: fp-spin 0.8s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes fp-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.feature-panel__status {
-  margin-top: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 14px;
-  border-radius: var(--radius-md);
-  background: #eff6ff;
-  border: 1px solid #dbeafe;
-  color: #1d4ed8;
-  font-size: 0.85rem;
-  line-height: 1.4;
-}
-
-.feature-panel__status-dots {
-  display: inline-flex;
-  gap: 3px;
-  flex-shrink: 0;
-}
-.feature-panel__status-dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #3b82f6;
-  animation: typing 1.3s ease-in-out infinite;
-}
-.feature-panel__status-dots span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.feature-panel__status-dots span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-/* ═══════════════════════════════════════════════
-   桥接栏（草稿 → 核心功能生成文件）
-   ═══════════════════════════════════════════════ */
-.bridge-bar {
-  margin: 12px 20px 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: var(--radius-md);
-  background: linear-gradient(180deg, #f0f6ff, #eaf2ff);
-}
-
-.bridge-bar__text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.bridge-bar__text strong {
-  font-size: 0.86rem;
-  color: var(--accent-blue);
-}
-
-.bridge-bar__text span {
-  font-size: 0.76rem;
-  color: var(--ink-faint);
-}
-
-.bridge-bar__btn {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent-blue);
-  color: #ffffff;
-  font-size: 0.82rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background 0.2s ease,
-    transform 0.15s ease;
-}
-
-.bridge-bar__btn svg {
-  width: 14px;
-  height: 14px;
-}
-
-.bridge-bar__btn:hover {
-  background: #1d4ed8;
-  transform: translateY(-1px);
-}
-
-/* 键盘可达性：可交互元素统一可见焦点环 */
-.feature-panel__submit:focus-visible,
-.feature-panel__close:focus-visible,
-.mode-btn:focus-visible,
-.mode-indicator__clear:focus-visible,
-.send-btn:focus-visible,
-.new-chat-btn:focus-visible,
-.home-btn:focus-visible,
-.bridge-bar__btn:focus-visible,
-.msg-action:focus-visible {
-  outline: none;
-  box-shadow:
-    0 0 0 2px #ffffff,
-    0 0 0 4px var(--accent-blue);
-}
-
-.mode-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 12px 9px;
-  border: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: transparent;
-  color: var(--ink-faint);
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    color 0.2s ease,
-    background 0.2s ease;
-  position: relative;
-  font-family: inherit;
   white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.mode-btn:hover {
-  color: var(--accent-blue);
-  background: #f8fafc;
-}
-
-.mode-btn--active {
-  color: var(--accent-blue);
-  background: transparent;
+  font-size: 0.92rem;
   font-weight: 600;
-}
-
-.mode-btn--active::after {
-  content: "";
-  position: absolute;
-  bottom: -1px;
-  left: 8px;
-  right: 8px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent-blue);
-}
-.mode-btn--home {
-  margin-left: auto;
-  border-left: 1px solid #e2e8f0;
-  padding-left: 16px;
-  border-radius: var(--radius-sm);
-  color: #3b5fc2;
-  font-weight: 600;
-}
-.mode-btn--home:hover {
-  color: #1e40af;
-  background: #dbe5ff;
-}
-
-.mode-btn__icon {
-  font-size: 1rem;
-  line-height: 1;
-  display: flex;
-}
-
-.mode-btn__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.mode-btn__label {
-  white-space: nowrap;
-}
-
-/* ═══════════════════════════════════════════════
-   Welcome screen
-   ═══════════════════════════════════════════════ */
-.welcome {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 32px 24px;
-  text-align: center;
-}
-
-.welcome__brand {
-  max-width: 520px;
-}
-
-.welcome__logo {
-  margin: 0 auto 20px;
-  display: grid;
-  place-items: center;
-}
-
-.welcome__logo-icon {
-  width: 56px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
-}
-
-.welcome__title {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(1.35rem, 2.4vw, 1.7rem);
-  font-weight: 700;
-  line-height: 1.25;
   color: var(--ink);
-  text-wrap: balance;
 }
 
-.welcome__desc {
-  margin-top: 10px;
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: var(--ink-faint);
-  max-width: 400px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.welcome__power {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 14px;
-  padding: 5px 12px;
-  background: #f7f8fa;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
-
-.welcome__power-label {
-  font-size: 0.74rem;
-  color: var(--ink-muted);
-}
-
-/* ═══════════════════════════════════════════════
-   Messages
-   ═══════════════════════════════════════════════ */
 .messages {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   padding: 24px 28px;
 }
 
+.conversation__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--ink-faint);
+  font-size: 0.86rem;
+}
+
+.empty-action {
+  padding: 8px 18px;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-blue);
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.empty-action:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+/* ---- Message ---- */
 .message {
   display: flex;
   gap: 12px;
@@ -2345,7 +1437,6 @@ watch(activeId, scrollToBottom);
   overflow: hidden;
 }
 
-/* Avatar styles */
 .avatar-icon {
   width: 32px;
   height: 32px;
@@ -2357,14 +1448,8 @@ watch(activeId, scrollToBottom);
 }
 
 .ai-avatar {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
   border-radius: 0;
+  overflow: hidden;
 }
 
 .ai-avatar-svg {
@@ -2384,12 +1469,13 @@ watch(activeId, scrollToBottom);
 }
 
 .message--assistant .message__bubble {
-  padding: 12px 18px;
-  background: #f0f4ff;
-  color: var(--ink-soft);
-  border-radius: 4px 14px 14px 14px;
   flex: 1;
   min-width: 0;
+  padding: 12px 18px;
+  background: #ffffff;
+  color: var(--ink-soft);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px 14px 14px 14px;
 }
 
 .message--user .message__bubble {
@@ -2417,6 +1503,7 @@ watch(activeId, scrollToBottom);
 .message__bubble--typing span:nth-child(2) {
   animation-delay: 0.2s;
 }
+
 .message__bubble--typing span:nth-child(3) {
   animation-delay: 0.4s;
 }
@@ -2433,16 +1520,18 @@ watch(activeId, scrollToBottom);
     opacity: 1;
   }
 }
+
 .message__bubble--error {
   padding: 14px 18px;
 }
+
 .message__error-text {
   font-size: 0.82rem;
   color: #dc2626;
   line-height: 1.6;
 }
 
-/* ──── AI 回复 Markdown 结构化样式（DeepSeek 风格） ────
+/* ──── AI 回复 Markdown 结构化样式 ────
    v-html 注入的内容无 scoped 属性，须用 :deep() 穿透。 */
 .message--assistant .message__bubble :deep(.markdown-body) {
   font-size: 0.925rem;
@@ -2463,12 +1552,11 @@ watch(activeId, scrollToBottom);
   border-radius: 6px;
   line-height: 1.4;
 }
-/* H2 前面不再需要 hr 分割的多余留白 */
+
 .message--assistant .message__bubble :deep(.markdown-body h2:first-child) {
   margin-top: 0;
 }
 
-/* H3 小标题：主题色字，强化层级 */
 .message--assistant .message__bubble :deep(.markdown-body h3) {
   margin: 14px 0 8px;
   font-size: 0.96rem;
@@ -2484,46 +1572,46 @@ watch(activeId, scrollToBottom);
   padding: 0 1px;
 }
 
-/* 列表：对齐紧凑、留呼吸 */
 .message--assistant .message__bubble :deep(.markdown-body ul),
 .message--assistant .message__bubble :deep(.markdown-body ol) {
   margin: 6px 0 10px;
   padding-left: 22px;
 }
+
 .message--assistant .message__bubble :deep(.markdown-body li) {
   margin: 4px 0;
 }
 
-/* 分隔线：弱化原粗分割，交给标题色条表达结构 */
 .message--assistant .message__bubble :deep(.markdown-body hr) {
   margin: 14px 0;
   border: 0;
   border-top: 1px dashed rgba(37, 99, 235, 0.25);
 }
 
-/* 代码/公式：等宽、浅底、圆角 */
 .message--assistant .message__bubble :deep(.markdown-body code),
 .message--assistant .message__bubble :deep(.markdown-body pre) {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   background: rgba(37, 99, 235, 0.07);
   border-radius: 5px;
 }
+
 .message--assistant .message__bubble :deep(.markdown-body code) {
   padding: 1px 5px;
   font-size: 0.88em;
   color: #1d4ed8;
 }
+
 .message--assistant .message__bubble :deep(.markdown-body pre) {
   padding: 10px 12px;
   overflow-x: auto;
   border: 1px solid rgba(37, 99, 235, 0.12);
 }
+
 .message--assistant .message__bubble :deep(.markdown-body pre code) {
   padding: 0;
   background: transparent;
 }
 
-/* 段落间距收紧，信息密度更高 */
 .message--assistant .message__bubble :deep(.markdown-body p) {
   margin: 6px 0;
 }
@@ -2536,6 +1624,7 @@ watch(activeId, scrollToBottom);
   font-size: 0.89rem;
   line-height: 1.55;
 }
+
 .message--assistant .message__bubble :deep(.markdown-body th),
 .message--assistant .message__bubble :deep(.markdown-body td) {
   border: 1px solid rgba(37, 99, 235, 0.28);
@@ -2545,6 +1634,7 @@ watch(activeId, scrollToBottom);
   word-break: break-word;
   white-space: normal;
 }
+
 .message--assistant .message__bubble :deep(.markdown-body th) {
   background: rgba(37, 99, 235, 0.1);
   color: var(--accent-blue-dark);
@@ -2552,15 +1642,13 @@ watch(activeId, scrollToBottom);
   border-bottom: 2px solid rgba(37, 99, 235, 0.4);
   white-space: nowrap;
 }
+
 .message--assistant
   .message__bubble
   :deep(.markdown-body tbody tr:nth-child(even)) {
   background: rgba(37, 99, 235, 0.04);
 }
-.message--assistant .message__bubble :deep(.markdown-body table:focus-visible) {
-  outline: none;
-}
-/* 单元格内的换行统一，避免内容叠行错位 */
+
 .message--assistant .message__bubble :deep(.markdown-body td br) {
   margin: 0;
 }
@@ -2616,6 +1704,11 @@ watch(activeId, scrollToBottom);
   background: #f3f4f6;
 }
 
+.msg-action--on {
+  color: var(--accent-blue);
+  background: rgba(37, 99, 235, 0.1);
+}
+
 .msg-action svg {
   width: 13px;
   height: 13px;
@@ -2632,118 +1725,20 @@ watch(activeId, scrollToBottom);
    Input Area
    ═══════════════════════════════════════════════ */
 .input-area {
-  padding: 16px 24px 20px;
+  padding: 14px 24px 18px;
   border-top: 1px solid var(--border-subtle);
-  background: #ffffff;
-}
-
-/* ---- 当前定向任务指示条 ---- */
-.mode-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 7px 10px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: 10px;
-  background: rgba(37, 99, 235, 0.06);
-  color: var(--accent-blue);
-  font-size: 0.78rem;
-}
-
-.mode-indicator__icon {
-  flex-shrink: 0;
-  display: flex;
-}
-
-.mode-indicator__icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.mode-indicator__label {
-  flex: 1;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mode-indicator__clear {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink-faint);
-  cursor: pointer;
-  transition:
-    color 0.2s ease,
-    background 0.2s ease;
-}
-
-.mode-indicator__clear:hover {
-  color: #dc2626;
-  background: #fef2f2;
-}
-
-.mode-indicator__clear svg {
-  width: 13px;
-  height: 13px;
-}
-
-.input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 3px 3px 16px;
-  border-radius: 14px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  transition:
-    border-color 0.2s ease,
-    background 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.input-wrap:focus-within {
-  border-color: var(--accent-blue);
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-
-.input-wrap input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  padding: 10px 0;
-  font-size: 0.92rem;
-  color: var(--ink);
-  font-family: inherit;
-}
-
-.input-wrap input::placeholder {
-  color: var(--ink-faint);
-}
-
-.input-wrap input:disabled {
-  opacity: 0.5;
+  background: #f7f5f2;
 }
 
 .send-btn {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 10px;
+  border-radius: 11px;
   background: var(--accent-blue);
   color: #fff;
   cursor: pointer;
@@ -2772,18 +1767,26 @@ watch(activeId, scrollToBottom);
 }
 
 .input-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin-top: 10px;
-  font-size: 0.62rem;
+  margin-top: 9px;
+  font-size: 0.66rem;
   color: var(--ink-faint);
+  text-align: center;
 }
 
-.input-hint svg {
-  width: 12px;
-  height: 12px;
+/* ═══════════════════════════════════════════════
+   Focus Ring
+   ═══════════════════════════════════════════════ */
+.send-btn:focus-visible,
+.new-chat-btn:focus-visible,
+.icon-btn:focus-visible,
+.ghost-btn:focus-visible,
+.chip:focus-visible,
+.empty-action:focus-visible,
+.msg-action:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px var(--accent-blue);
 }
 
 /* ═══════════════════════════════════════════════
@@ -2796,16 +1799,8 @@ watch(activeId, scrollToBottom);
 /* ═══════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════ */
-@media (max-width: 768px) {
-  .feature-nav {
-    display: none;
-  }
-
-  .mode-bar {
-    display: flex;
-  }
-
-  .assistant-sidebar {
+@media (max-width: 860px) {
+  .sidebar {
     position: fixed;
     top: 0;
     left: 0;
@@ -2813,9 +1808,10 @@ watch(activeId, scrollToBottom);
     z-index: 50;
     transform: translateX(-100%);
     transition: transform 0.28s var(--ease-out);
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.12);
   }
 
-  .assistant-sidebar--open {
+  .sidebar--open {
     transform: translateX(0);
   }
 
@@ -2824,40 +1820,36 @@ watch(activeId, scrollToBottom);
     position: fixed;
     inset: 0;
     z-index: 40;
-    background: rgba(0, 0, 0, 0.08);
+    background: rgba(0, 0, 0, 0.12);
   }
 
-  .assistant-main {
-    padding: 12px;
+  .icon-btn--drawer {
+    display: inline-flex;
   }
 
-  .assistant-mobile-bar {
-    display: flex;
-  }
-
-  .assistant-shell {
-    border-radius: 12px;
-  }
-
-  .welcome {
-    padding: 32px 18px 20px;
-  }
-
-  .welcome__logo-icon {
-    width: 50px;
-    height: 50px;
+  .conversation__bar {
+    padding: 12px 16px;
   }
 
   .messages {
-    padding: 20px 16px;
+    padding: 18px 14px;
   }
 
-  .message {
-    max-width: 94%;
+  .message--user {
+    max-width: 88%;
   }
 
   .input-area {
-    padding: 14px 14px 16px;
+    padding: 12px 14px 14px;
+  }
+
+  .landing__bar {
+    padding: 14px 16px;
+  }
+
+  .landing__body {
+    padding: 16px 16px 48px;
+    gap: 20px;
   }
 }
 
@@ -2871,27 +1863,25 @@ watch(activeId, scrollToBottom);
   .message__bubble--typing span {
     animation: none !important;
   }
-  .assistant-sidebar {
-    transition: none !important;
-  }
-  .sidebar-overlay {
+  .sidebar {
     transition: none !important;
   }
   .msg-action,
-  .mode-btn,
-  .feature-nav__item,
   .history-item,
   .history-row,
   .icon-btn,
+  .ghost-btn,
+  .chip,
   .send-btn,
-  .input-wrap,
+  .composer,
   .new-chat-btn,
   .sidebar-search,
   .history-delete,
   .history-pin {
     transition: none !important;
   }
-  .send-btn:hover:not(:disabled) {
+  .send-btn:hover:not(:disabled),
+  .chip:hover {
     transform: none;
   }
 }
