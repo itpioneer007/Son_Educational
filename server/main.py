@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from config import OUTPUT_DIR, DATA_DIR, TASKS_FILE, CONTENTS_DIR, HOST, PORT
 from ai_service import (
     stream_ppt_content, stream_doc_content, stream_quiz_content, stream_exam_content,
-    chat_with_qwen, chat_with_qwen_stream,
+    chat_with_qwen_stream,
 )
 from file_generator import (
     generate_pptx_from_template,
@@ -630,7 +630,7 @@ def download_file(task_id: str):
     )
 
 
-# ── API: AI 备课助手 ─────────────────────────────────────────
+# ── API: AI 教师助手 ─────────────────────────────────────────
 
 class ChatMessage(BaseModel):
     role: str  # user | assistant
@@ -644,13 +644,12 @@ class TeacherProfile(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
-    feature: str = ""            # 大功能（构思层）：plan / lesson / quiz，空为通用问答
     profile: TeacherProfile | None = None  # 教师角色画像（可空）
 
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
-    """AI 备课助手：按教师画像 + 大功能定向调用 Qwen，流式（SSE）返回，前端逐字渲染"""
+    """AI 教师助手：按教师画像调用 Qwen 做教学问答，流式（SSE）返回，前端逐字渲染"""
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     profile = (
         {"subject": req.profile.subject, "grade": req.profile.grade}
@@ -660,13 +659,11 @@ async def chat_endpoint(req: ChatRequest):
 
     async def event_stream():
         try:
-            async for delta in chat_with_qwen_stream(
-                messages, feature=req.feature, profile=profile
-            ):
+            async for delta in chat_with_qwen_stream(messages, profile=profile):
                 yield f"data: {json.dumps({'content': delta}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
         except HTTPException:
-            yield f"data: {json.dumps({'error': 'AI 备课助手服务异常'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': 'AI 教师助手服务异常'}, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 

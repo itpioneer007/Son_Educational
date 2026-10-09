@@ -296,9 +296,9 @@ async def stream_exam_content(
         yield delta
 
 
-# ── AI 备课助手 Prompt ──────────────────────────────────────────
+# ── AI 教师助手 Prompt ──────────────────────────────────────────
 
-CHAT_SYSTEM_PROMPT = """你是「知课 AI 备课助手」，一名深耕基础教育多年的资深教学专家，服务对象是中小学各学科、各年级、各类学生的任课教师。
+CHAT_SYSTEM_PROMPT = """你是「知课 AI 教师助手」，一名深耕基础教育多年的资深教学专家，专门为中小学各学科、各年级、各类学生的任课教师答疑解惑；你只做教学相关的事，不闲聊、不越界。
 
 【核心身份】
 - 你是教育领域的专业顾问，而非通用闲聊机器人。你懂课标、懂教材、懂课堂、懂学生，给出的建议必须符合教育学规律和真实教学情境。
@@ -317,7 +317,7 @@ CHAT_SYSTEM_PROMPT = """你是「知课 AI 备课助手」，一名深耕基础�
    - 知识性内容务必严谨（定义、公式、原理、例题答案），错误知识宁可不答也要避免误导学生。
    - 对存疑或易变的事实（如具体地区考纲差异、教材版本、教辅数据），主动提示教师核验，不硬给断言。
    - 不输出任何不当、夸张或违背教学伦理的内容。
-6. 精简与结构化（针对通用问答等自由提问）：
+6. 精简与结构化：
    - 默认使用二级结构呈现：能用要点列表（- 或 1/2/3）就用，关键处用加粗小标题。
    - 控制篇幅，突出核心、删冗余；信息密度高、可读性强。
    - 教师要求"详细/完整/教案全文"等时才展开长文，否则给出提纲级或要点级回答。
@@ -332,28 +332,6 @@ CHAT_SYSTEM_PROMPT = """你是「知课 AI 备课助手」，一名深耕基础�
     - 单元格内容保持简短，不使用超长或含未转义 `|` 的内容，避免表格错位。
     - 表格前后各空一行，与上下文自然分隔。
     - 如果内容不适合表格（单元格过长/层级复杂），改用分点列出的方式表述，不要强行塞表格。"""
-
-# 大功能定向指令（构思层）：每个功能为系统提示注入一段定向任务，配合前端子需求表单使用
-FEATURE_PROMPTS = {
-    "plan": """【当前任务：备课构思】请严格按用户给出的「课题、课型、教材版本、学生层次」构思教学方案。
-课型决定整体结构：
-- 新授课：概念引入→探究归纳→例题示范→练习巩固→小结
-- 复习课：知识框架梳理→典型例题→易错点归纳→真题演练
-- 习题讲评课：错因分析→方法归纳→变式训练→迁移应用
-- 专题课：一题多解→多题一解→思想方法提炼→深度拓展
-学生层次决定深度与节奏：重点班可拔高例题、加入拓展思考；普通班重基础落实、讲练并重；基础薄弱需降难度、多具象、衔接前置知识。
-若用户勾选高考考点标注，则对每个知识点标注高考考频（高频/中频/低频）、常考题型与分值。
-输出须包含：教学目标、教学重难点、课堂导入、教学环节流程（标注时间）、板书设计建议。结构清晰、可操作，便于教师审阅后据此生成课件。""",
-    "lesson": """【当前任务：教案草稿】请严格按用户给出的「课题、课型、教材版本、学生层次、课时、教案详略」输出完整教案草稿。
-教案详略决定详略程度：详案需精确到分钟、含过渡语与逐环节设计，适合公开课/检查；简案给出环节提纲与要点即可，适合日常使用。
-结构须包含：教学目标（知识与技能、过程与方法、情感态度与价值观）、教学重难点、课时安排、教学准备、教学过程（导入→新授→巩固→总结，并标注时间）、板书设计、作业布置、教学反思要点。
-若缺少学科、学段、教材版本等关键信息，优先从课题名称推断（如「函数的单调性」→高中数学），推断不出再简短追问；不确定的考点提示教师核验。""",
-    "quiz": """【当前任务：出题草稿】请严格按用户给出的「课题、用途、题型分布、学生层次、难度、题量」设计分层练习草稿。
-- 用途决定题型与配比：课堂练习题量适中重基础；课后作业分层梯度完整；周测/月考按考试标准配比并控制难度分布
-- 题型分布按用户选择执行（高考标准≈选择+填空+解答题配比，或全选择/全解答）
-- 学生层次决定分层比例：重点班提升/拓展题占多数；普通班基础/提升为主；基础薄弱以基础题为主、降低难度
-按基础题/提升题/拓展题分层，每题附参考答案与考察点；若用户勾选高考考点标注，则每题标注对应高考考点与真题考法。""",
-}
 
 
 def build_teacher_profile_prompt(profile: dict) -> str:
@@ -373,57 +351,17 @@ def build_teacher_profile_prompt(profile: dict) -> str:
     )
 
 
-async def chat_with_qwen(
-    messages: list, feature: str = "", profile: dict | None = None
-) -> str:
-    """AI 备课助手：调用 Qwen（百炼 OpenAI 兼容接口），支持大功能定向（ppt/lesson/quiz）与教师画像"""
-    if not QWEN_API_KEY:
-        raise RuntimeError("未设置 QWEN_API_KEY，无法使用 AI 备课助手")
-
-    system_prompt = CHAT_SYSTEM_PROMPT
-    profile_prompt = build_teacher_profile_prompt(profile or {})
-    if profile_prompt:
-        system_prompt += "\n\n" + profile_prompt
-    feature_prompt = FEATURE_PROMPTS.get(feature or "", "")
-    if feature_prompt:
-        system_prompt += "\n\n" + feature_prompt
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{QWEN_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {QWEN_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": QWEN_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    *messages,
-                ],
-                "temperature": 0.7,
-                "max_tokens": 4096,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
-
-
 async def chat_with_qwen_stream(
-    messages: list, feature: str = "", profile: dict | None = None
+    messages: list, profile: dict | None = None
 ):
-    """流式版 AI 备课助手：逐段返回 Qwen 生成内容，用于前端即时渲染、避免长时间等待无反馈"""
+    """流式版 AI 教师助手：逐段返回 Qwen 生成内容，用于前端即时渲染、避免长时间等待无反馈"""
     if not QWEN_API_KEY:
-        raise RuntimeError("未设置 QWEN_API_KEY，无法使用 AI 备课助手")
+        raise RuntimeError("未设置 QWEN_API_KEY，无法使用 AI 教师助手")
 
     system_prompt = CHAT_SYSTEM_PROMPT
     profile_prompt = build_teacher_profile_prompt(profile or {})
     if profile_prompt:
         system_prompt += "\n\n" + profile_prompt
-    feature_prompt = FEATURE_PROMPTS.get(feature or "", "")
-    if feature_prompt:
-        system_prompt += "\n\n" + feature_prompt
 
     # 流式接口必须设置超时，否则 Qwen 挂起时前端会无限等待（表现为"点击没反应"）
     async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
