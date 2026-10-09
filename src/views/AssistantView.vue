@@ -422,16 +422,22 @@ watch(activeId, scrollToBottom);
             </svg>
             新对话
           </button>
-          <RouterLink to="/" class="icon-btn" title="返回主页" aria-label="返回主页">
+          <RouterLink
+            to="/"
+            class="back-home-btn"
+            title="返回主页"
+            aria-label="返回主页"
+          >
             <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <path
                 d="M3 10l7-6 7 6M5 9v6.5h10V9"
                 stroke="currentColor"
-                stroke-width="1.5"
+                stroke-width="1.7"
                 stroke-linecap="round"
                 stroke-linejoin="round"
               />
             </svg>
+            返回主页
           </RouterLink>
         </div>
 
@@ -1110,6 +1116,43 @@ watch(activeId, scrollToBottom);
 .icon-btn svg {
   width: 16px;
   height: 16px;
+}
+
+/* 返回主页：对话页顶部的次级出口，用实体描边 + 文字保证一眼可辨 */
+.back-home-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.back-home-btn:hover {
+  color: var(--accent-blue);
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.38);
+  box-shadow: 0 1px 6px rgba(37, 99, 235, 0.14);
+}
+
+.back-home-btn svg {
+  width: 15px;
+  height: 15px;
 }
 
 .icon-btn--drawer {
@@ -1870,6 +1913,7 @@ watch(activeId, scrollToBottom);
   .history-item,
   .history-row,
   .icon-btn,
+  .back-home-btn,
   .ghost-btn,
   .chip,
   .send-btn,
