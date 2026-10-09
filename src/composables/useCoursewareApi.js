@@ -1,9 +1,9 @@
 /**
  * 课件生成 API 封装
- * 对接 Python FastAPI 后端 (http://localhost:8000)
+ * 后端地址统一由 src/config/api.js 提供（可用 VITE_API_ORIGIN 覆盖）
  */
 
-const API_BASE = "http://localhost:8000/api/courseware";
+import { API_BASE } from "../config/api.js";
 
 /**
  * 提交课件生成任务

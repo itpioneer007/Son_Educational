@@ -19,6 +19,7 @@ import {
 import ContentRevisePanel from "../components/ContentRevisePanel.vue";
 import FormWizard from "../components/FormWizard.vue";
 import TemplateMarket from "../components/TemplateMarket.vue";
+import { SPARK_TEMPLATES_API, apiUrl } from "../config/api.js";
 
 const route = useRoute();
 
@@ -224,7 +225,7 @@ async function fetchSparkTemplates() {
   sparkTemplateLoading.value = true;
   sparkTemplateError.value = "";
   try {
-    const res = await fetch("http://localhost:8000/api/spark/templates");
+    const res = await fetch(SPARK_TEMPLATES_API);
     const data = await res.json();
     sparkTemplates.value = data.templates || [];
     if (data.error) sparkTemplateError.value = data.error;
@@ -251,7 +252,7 @@ function previewUrl(path) {
   if (/^https?:\/\//.test(path)) return path;
   const looksLikeImage = /\.(png|jpe?g|svg|gif|webp)([\?#].*)?$/i.test(path);
   if (!looksLikeImage) return "";
-  return `http://localhost:8000${path}`;
+  return apiUrl(path);
 }
 
 // 归一化选择值：选中"自定义"时取自定义输入内容，否则取所选预设

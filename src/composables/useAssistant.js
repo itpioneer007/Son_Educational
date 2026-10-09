@@ -1,8 +1,8 @@
 import { reactive } from "vue";
+import { CHAT_API } from "../config/api.js";
 
 const STORAGE_KEY = "zhike-assistant-sessions";
 const ACTIVE_KEY = "zhike-assistant-active";
-const CHAT_API = "http://localhost:8000/api/chat";
 
 function uid(prefix = "s") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
