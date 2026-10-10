@@ -3,6 +3,7 @@ import { ref, computed, onMounted, nextTick, watch } from "vue";
 import { useRouter } from "vue-router";
 import SiteNav from "../components/layout/SiteNav.vue";
 import * as echarts from "echarts";
+import { dateKey, seededInt, growingCount } from "../utils/demoData.js";
 
 const router = useRouter();
 
@@ -1482,6 +1483,15 @@ const currentVideos = computed(() => {
   return all.filter(hasVideo);
 });
 
+// 首页概览数字：学科数取真实的视频学科数；学习进度按自然日做种子，
+// 同一天稳定、跨天缓慢增长 —— 比写死的 12 / 86% 更像真实学习记录，
+// 也不会每次刷新就乱跳。
+const subjectCount = computed(() => Object.keys(courseVideos).length);
+const learningStats = computed(() => ({
+  studied: growingCount("lessons-studied", 6, 0.15, 40),
+  progress: seededInt(`lessons-progress:${dateKey()}`, 78, 93),
+}));
+
 function openCourseDetail(id) {
   currentCourseId.value = id;
   playingVideo.value = null;
@@ -2203,11 +2213,11 @@ watch(activeMenu, (newVal) => {
           <div class="menu-footer">
             <div class="stats-card">
               <div class="stat-item">
-                <span class="stat-value">12</span>
+                <span class="stat-value">{{ learningStats.studied }}</span>
                 <span class="stat-label">已学课程</span>
               </div>
               <div class="stat-item">
-                <span class="stat-value">86%</span>
+                <span class="stat-value">{{ learningStats.progress }}%</span>
                 <span class="stat-label">平均进度</span>
               </div>
             </div>
@@ -2244,15 +2254,17 @@ watch(activeMenu, (newVal) => {
                     <span class="home-stat-label">课程资源</span>
                   </div>
                   <div class="home-stat">
-                    <span class="home-stat-num">6</span>
+                    <span class="home-stat-num">{{ subjectCount }}</span>
                     <span class="home-stat-label">学科覆盖</span>
                   </div>
                   <div class="home-stat">
-                    <span class="home-stat-num">5</span>
+                    <span class="home-stat-num">{{ menuItems.length }}</span>
                     <span class="home-stat-label">功能模块</span>
                   </div>
                   <div class="home-stat">
-                    <span class="home-stat-num">86%</span>
+                    <span class="home-stat-num"
+                      >{{ learningStats.progress }}%</span
+                    >
                     <span class="home-stat-label">平均完成率</span>
                   </div>
                 </div>
