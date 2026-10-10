@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onMounted, onUnmounted, nextTick } from "vue";
+import { computed, ref, reactive, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import * as echarts from "echarts";
 import {
@@ -94,12 +94,15 @@ const reviseReady = computed(() => contentReady.value);
 
 // 新建一条流式正文消息（AI 回复），随 delta 增量填充 content
 function startStreamMessage(panel) {
-  const msg = {
+  // 必须用 reactive 包一层：普通对象 push 进响应式数组后，外部持有的仍是
+  // 原始对象，`msg.content += delta` 会绕过数组里那个响应式代理，不触发视图
+  // 更新 —— 表现为「进度卡在个位数、末尾一次性刷出全文」。
+  const msg = reactive({
     id: nextReviseId(),
     role: "assistant",
     content: "",
     streaming: true,
-  };
+  });
   reviseMessages.value[panel].push(msg);
   return msg;
 }
