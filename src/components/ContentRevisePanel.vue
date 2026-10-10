@@ -62,6 +62,18 @@ function renderMd(md) {
   return marked.parse(md || "", { gfm: true, breaks: true });
 }
 
+// 正文是否已开始流式输出：末尾那条 assistant 消息一旦有内容，即视为「文字已经
+// 开始往外冒」。此时正文本身就是最直观的进度，底部的「正在生成」提示可以隐去，
+// 只在首 token 到达前的静默期（大模型首字延迟可能有几十秒）才需要它占位。
+const hasLiveContent = computed(() => {
+  const list = props.messages;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m.role === "assistant" && m.streaming) return !!m.content;
+  }
+  return false;
+});
+
 // 内容增长（含流式追加）时保持滚动到底部，便于持续阅读
 const contentLength = computed(() =>
   props.messages.reduce(
@@ -136,14 +148,31 @@ watch(contentLength, async () => {
         <p v-else class="revise__bubble">{{ m.text }}</p>
       </article>
 
-      <div v-if="generating" class="revise__working" aria-live="polite">
-        <div class="revise__bar">
-          <div
-            class="revise__bar-fill"
-            :style="{ width: progress + '%' }"
-          ></div>
-        </div>
-        <p class="revise__stage">{{ stage || "处理中…" }} · {{ progress }}%</p>
+      <!-- 正文生成阶段：真流式下正文在逐段冒出，百分比反而让人以为「卡住了」，
+           因此只给一个脉动提示，且正文一开始输出就隐去；
+           导出阶段正文已定稿静止、没有别的活性证据，仍保留进度条。 -->
+      <div
+        v-if="generating && (exporting || !hasLiveContent)"
+        class="revise__working"
+        aria-live="polite"
+      >
+        <template v-if="exporting">
+          <div class="revise__bar">
+            <div
+              class="revise__bar-fill"
+              :style="{ width: progress + '%' }"
+            ></div>
+          </div>
+          <p class="revise__stage">
+            {{ stage || "正在导出…" }} · {{ progress }}%
+          </p>
+        </template>
+        <p v-else class="revise__live">
+          <span class="revise__dots" aria-hidden="true"
+            ><i></i><i></i><i></i
+          ></span>
+          <span>{{ stage || "正在生成…" }}</span>
+        </p>
       </div>
     </div>
 
@@ -377,6 +406,53 @@ watch(contentLength, async () => {
   color: var(--ink-muted);
 }
 
+/* ── 生成中的脉动提示（无百分比）─────────────────
+   真流式下正文会逐段冒出，正文本身就是进度；
+   这个提示只在首 token 到达前的静默期占位，正文一开始输出即隐去。 */
+.revise__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--accent-deep);
+}
+
+.revise__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.revise__dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: revise-dot 1.2s infinite ease-in-out both;
+}
+
+.revise__dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.revise__dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes revise-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
 .revise__foot {
   display: flex;
   flex-direction: column;
@@ -485,6 +561,10 @@ watch(contentLength, async () => {
   .revise__send,
   .revise__export {
     transition: none;
+  }
+  .revise__dots i {
+    animation: none;
+    opacity: 0.7;
   }
 }
 </style>
