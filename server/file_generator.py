@@ -622,14 +622,27 @@ def generate_pptx(content: dict, uid: str = "") -> tuple:
 # DOCX 生成 - 结构化教案
 # ════════════════════════════════════════════════════════════════
 
-# 教案标准配色（专业沉稳）
-_DOC_PRIMARY   = "1A365D"   # 深蓝 —— 一级标题、主题色
-_DOC_SECONDARY = "2B6CB0"   # 中蓝 —— 二级标题 / 目标维度强调
-_DOC_ACCENT    = "0E7490"   # 重点强调色
-_DOC_LIGHT_BG  = "EAF2FB"   # 一级标题浅色色块
-_DOC_TABLE_BG  = "F1F5F9"   # 基本信息表标签底色
-_DOC_BODY      = "334155"   # 正文深灰
-_DOC_MUTED     = "64748B"   # 次要说明文字
+# 教案标准配色（中性墨色，浅色纸张风）—— 与 AI 回答、试卷导出同一套色
+_DOC_PRIMARY   = "1F2328"   # 墨黑 —— 一级标题、大标题
+_DOC_SECONDARY = "3A4048"   # 深灰 —— 二级标题
+_DOC_ACCENT    = "4A5158"   # 中灰 —— 三级标题 / 序号
+_DOC_LIGHT_BG  = "F2F3F5"   # 一级标题浅灰色块
+_DOC_TABLE_BG  = "F5F6F7"   # 基本信息表标签底色
+_DOC_BODY      = "26292E"   # 正文墨色
+_DOC_MUTED     = "6B7280"   # 次要说明文字
+_DOC_RULE      = "D0D3D8"   # 分隔线 / 边框
+
+# 字体常量：标题用黑体（公文惯例），正文用宋体，彻底消除多字体混排
+_FONT_TITLE = "黑体"
+_FONT_BODY  = "宋体"
+
+# 字号阶梯（磅）：与试卷 HTML 的 px 阶梯（22/17/15/14）保持同比例
+_SZ_TITLE = 22     # 文档大标题
+_SZ_H1    = 15     # 一级栏目（教学目标 / 教学过程设计 …）
+_SZ_H2    = 13     # 二级栏目（教学环节）
+_SZ_H3    = 12     # 三级条目
+_SZ_BODY  = 12     # 正文 / 列表
+_SZ_META  = 10.5   # 副标题 / 表内文字
 
 # 匹配「知识与技能 / 过程与方法 / 情感态度（与价值观）」等目标维度前缀
 _MATCH_GOAL_DIMENSION = re.compile(
@@ -669,31 +682,51 @@ def _left_bar(p, color=_DOC_PRIMARY, sz=30):
 
 
 def _add_heading(doc, text, level=1):
-    """添加统一层级样式标题：一级=深蓝色块+左竖条，二级=◆中蓝加粗，三级=重点加大。"""
+    """统一层级标题：一级=黑体+浅底色块，二级=黑体加粗，三级=宋体加粗。
+
+    字号取自 _SZ_H1 / _SZ_H2 / _SZ_H3；标题只用黑体，正文只用宋体，
+    彻底消除原先三套中文字体混排。
+    """
     p = doc.add_paragraph()
     pf = p.paragraph_format
+    pf.line_spacing = 1.4
     if level <= 1:
         pf.space_before = DocxPt(16)
         pf.space_after = DocxPt(8)
         pf.left_indent = Cm(0.1)
         _shade_paragraph(p, _DOC_LIGHT_BG)
-        _left_bar(p, _DOC_PRIMARY, 30)
-        _set_cn_font(p.add_run("    " + text), size=16, bold=True, color=_DOC_PRIMARY, name="黑体")
+        _left_bar(p, _DOC_PRIMARY, 24)
+        _set_cn_font(p.add_run("    " + text), size=_SZ_H1, bold=True,
+                     color=_DOC_PRIMARY, name=_FONT_TITLE)
     elif level == 2:
-        pf.space_before = DocxPt(10)
+        pf.space_before = DocxPt(12)
         pf.space_after = DocxPt(6)
-        pf.left_indent = Cm(0.5)
-        _set_cn_font(p.add_run("◆ " + text), size=14, bold=True, color=_DOC_SECONDARY, name="微软雅黑")
+        pf.left_indent = Cm(0.4)
+        _set_cn_font(p.add_run(text), size=_SZ_H2, bold=True,
+                     color=_DOC_SECONDARY, name=_FONT_TITLE)
     else:
-        pf.space_before = DocxPt(6)
+        pf.space_before = DocxPt(8)
         pf.space_after = DocxPt(4)
-        pf.left_indent = Cm(0.8)
-        _set_cn_font(p.add_run(text), size=12, bold=True, color=_DOC_ACCENT)
+        pf.left_indent = Cm(0.7)
+        _set_cn_font(p.add_run(text), size=_SZ_H3, bold=True,
+                     color=_DOC_ACCENT, name=_FONT_TITLE)
+    return p
+
+
+def _add_divider(doc):
+    """水平分隔线：居中细横线，用于分隔正文大板块。"""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pf = p.paragraph_format
+    pf.space_before = DocxPt(8)
+    pf.space_after = DocxPt(8)
+    _set_cn_font(p.add_run("─" * 46), size=_SZ_META,
+                 color=_DOC_RULE, name=_FONT_BODY)
     return p
 
 
 def _fill_info_cell(cell, text, is_label):
-    """填充基本信息表单元格：标签单元格浅灰底 + 深蓝加粗，值单元格居中。"""
+    """填充基本信息表单元格：标签单元格浅灰底 + 墨色加粗，值单元格居中。"""
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT if is_label else WD_ALIGN_PARAGRAPH.CENTER
     pf = p.paragraph_format
@@ -701,9 +734,12 @@ def _fill_info_cell(cell, text, is_label):
     pf.space_after = DocxPt(2)
     if is_label:
         _shade_paragraph(p, _DOC_TABLE_BG)
-        _set_cn_font(p.add_run(text), size=11, bold=True, color=_DOC_PRIMARY)
+        _set_cn_font(p.add_run(text), size=_SZ_META, bold=True,
+                     color=_DOC_PRIMARY, name=_FONT_BODY)
     else:
-        _set_cn_font(p.add_run(text or "—"), size=11, color=_DOC_BODY)
+        _set_cn_font(p.add_run(text or "—"), size=_SZ_META,
+                     color=_DOC_BODY, name=_FONT_BODY)
+    cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
     cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
 
@@ -754,6 +790,10 @@ def _parse_markdown_blocks(md: str) -> list:
         heading = re.match(r'^(#{1,6})\s+(.*)$', line)
         if heading:
             blocks.append((f"h{len(heading.group(1))}", heading.group(2).strip()))
+            continue
+        # 水平分隔线：--- / *** / ___（三个及以上），渲染为细线而非字面文本
+        if re.match(r'^([-*_])\1{2,}$', line):
+            blocks.append(("hr", ""))
             continue
         if re.match(r'^[-*+]\s+', line):
             items = [re.sub(r'^[-*+]\s+', '', line).strip()]
@@ -807,12 +847,13 @@ def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     section.left_margin = Cm(2.6)
     section.right_margin = Cm(2.6)
 
+    # 正文基线：宋体 + _SZ_BODY（此前是 Microsoft YaHei 11pt，与标题黑体脱节）
     normal = doc.styles['Normal']
-    normal.font.name = 'Microsoft YaHei'
-    normal.font.size = DocxPt(11)
+    normal.font.name = _FONT_BODY
+    normal.font.size = DocxPt(_SZ_BODY)
     normal.paragraph_format.line_spacing = 1.5
     normal.paragraph_format.space_after = DocxPt(4)
-    normal.element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
+    normal.element.rPr.rFonts.set(qn('w:eastAsia'), _FONT_BODY)
 
     # ① 标题区
     title_text = _first_heading(md, meta.get("topic") or "教案")
@@ -820,20 +861,21 @@ def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title_para.paragraph_format.space_before = DocxPt(12)
     title_para.paragraph_format.space_after = DocxPt(6)
-    _set_cn_font(title_para.add_run(title_text), size=26, bold=True,
-                 color=_DOC_PRIMARY, name="黑体")
+    _set_cn_font(title_para.add_run(title_text), size=_SZ_TITLE, bold=True,
+                 color=_DOC_PRIMARY, name=_FONT_TITLE)
 
     subtitle = " · ".join(x for x in [meta.get("subject", ""), meta.get("grade", "")] if x)
     if subtitle:
         sub_para = doc.add_paragraph()
         sub_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         sub_para.paragraph_format.space_after = DocxPt(6)
-        _set_cn_font(sub_para.add_run(subtitle), size=13, color=_DOC_MUTED)
+        _set_cn_font(sub_para.add_run(subtitle), size=_SZ_META + 1,
+                     color=_DOC_MUTED, name=_FONT_BODY)
 
     div_para = doc.add_paragraph()
     div_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     div_para.paragraph_format.space_after = DocxPt(12)
-    _set_cn_font(div_para.add_run("─" * 46), size=10, color="CBD5E1")
+    _set_cn_font(div_para.add_run("─" * 46), size=_SZ_META, color=_DOC_RULE, name=_FONT_BODY)
 
     # ② 课程基本信息表（取自任务参数，保证准确）
     _add_info_table(doc, [
@@ -851,30 +893,36 @@ def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
                 continue  # 标题已在页头渲染
             _add_heading(doc, _strip_md_inline(payload), 1)
         elif kind == "h2":
-            _add_heading(doc, _strip_md_inline(payload), 1)
-        elif kind in ("h3", "h4"):
             _add_heading(doc, _strip_md_inline(payload), 2)
+        elif kind in ("h3", "h4"):
+            _add_heading(doc, _strip_md_inline(payload), 3)
         elif kind in ("h5", "h6"):
             _add_heading(doc, _strip_md_inline(payload), 3)
+        elif kind == "hr":
+            _add_divider(doc)
         elif kind == "ul":
             for item in payload:
                 p = doc.add_paragraph()
                 p.paragraph_format.left_indent = Cm(1.0)
                 p.paragraph_format.space_after = DocxPt(3)
-                _set_cn_font(p.add_run("▸ "), size=11, color="94A3B8")
-                _set_cn_font(p.add_run(_strip_md_inline(item)), size=11, color=_DOC_BODY)
+                _set_cn_font(p.add_run("· "), size=_SZ_BODY, color=_DOC_MUTED, name=_FONT_BODY)
+                _set_cn_font(p.add_run(_strip_md_inline(item)),
+                             size=_SZ_BODY, color=_DOC_BODY, name=_FONT_BODY)
         elif kind == "ol":
             for idx, item in enumerate(payload, 1):
                 p = doc.add_paragraph()
                 p.paragraph_format.left_indent = Cm(1.0)
                 p.paragraph_format.space_after = DocxPt(3)
-                _set_cn_font(p.add_run(f"{idx}. "), size=11, bold=True, color=_DOC_ACCENT)
-                _set_cn_font(p.add_run(_strip_md_inline(item)), size=11, color=_DOC_BODY)
+                _set_cn_font(p.add_run(f"{idx}. "), size=_SZ_BODY, bold=True,
+                             color=_DOC_ACCENT, name=_FONT_BODY)
+                _set_cn_font(p.add_run(_strip_md_inline(item)),
+                             size=_SZ_BODY, color=_DOC_BODY, name=_FONT_BODY)
         else:
             p = doc.add_paragraph()
             p.paragraph_format.left_indent = Cm(0.5)
             p.paragraph_format.space_after = DocxPt(4)
-            _set_cn_font(p.add_run(_strip_md_inline(payload)), size=11, color=_DOC_BODY)
+            _set_cn_font(p.add_run(_strip_md_inline(payload)),
+                         size=_SZ_BODY, color=_DOC_BODY, name=_FONT_BODY)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filepath, filename = unique_output_path(title_text, "docx", uid, "教案")
@@ -885,35 +933,59 @@ def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
 
 # HTML 文档外壳（练习题 / 试卷共用）：浅色纸张风，便于阅读与打印
 _HTML_MD_CSS = """
+  :root {
+    /* 与教案 DOCX 同一套中性墨色系，保证"导出即一致" */
+    --paper: #FFFFFF;
+    --ink: #1F2328;
+    --ink-body: #26292E;
+    --ink-muted: #6B7280;
+    --rule: #E4E5E8;
+    --shade: #F2F3F5;
+    --chip: #F5F6F7;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    /* 单一字体栈：与教案正文（宋体）语义一致，屏幕端取系统中文黑体族 */
+    font-family: "Source Han Serif SC", "Noto Serif SC", "Songti SC",
+                 "SimSun", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
     max-width: 860px; margin: 0 auto; padding: 48px 28px 64px;
-    color: #1E293B; background: #F7F5F2; line-height: 1.8;
+    color: var(--ink-body); background: #F7F5F2; line-height: 1.8;
+    font-size: 15px;
   }
-  .header { text-align: center; margin-bottom: 36px; padding-bottom: 24px;
-    border-bottom: 2px solid #E2E8F0; }
-  .header h1 { font-size: 1.9rem; font-weight: 800; color: #1A365D;
-    letter-spacing: -0.02em; margin-bottom: 10px; }
+  .header { text-align: center; margin-bottom: 32px; padding-bottom: 22px;
+    border-bottom: 2px solid var(--rule); }
+  .header h1 { font-size: 22px; font-weight: 700; color: var(--ink);
+    letter-spacing: 0.02em; margin-bottom: 12px; }
   .header .meta { display: flex; flex-wrap: wrap; align-items: center;
-    justify-content: center; gap: 10px 18px; color: #64748B; font-size: 0.9rem; }
-  .header .meta span { padding: 3px 12px; background: #F1F5F9; border-radius: 20px; }
-  .doc { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px;
-    padding: 32px 34px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-  .doc h1 { font-size: 1.5rem; color: #1A365D; margin: 30px 0 14px;
-    padding-bottom: 8px; border-bottom: 2px solid #EAF2FB; }
-  .doc h2 { font-size: 1.25rem; color: #1A365D; margin: 28px 0 12px;
-    padding: 8px 12px; background: #EAF2FB; border-left: 4px solid #1A365D;
+    justify-content: center; gap: 10px 16px; color: var(--ink-muted);
+    font-size: 13px; }
+  .header .meta span { padding: 3px 12px; background: var(--chip);
+    border-radius: 20px; }
+  .doc { background: var(--paper); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 30px 34px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  /* 标题阶梯与教案一致：22 / 17 / 15 / 14 */
+  .doc h1 { font-size: 17px; color: var(--ink); margin: 26px 0 12px;
+    padding-bottom: 7px; border-bottom: 1px solid var(--rule); }
+  .doc h2 { font-size: 15px; color: var(--ink); margin: 22px 0 10px;
+    padding: 7px 12px; background: var(--shade); border-left: 3px solid #CBD0D8;
     border-radius: 4px; }
-  .doc h3 { font-size: 1.08rem; color: #2B6CB0; margin: 20px 0 10px; }
-  .doc h4, .doc h5, .doc h6 { font-size: 1rem; color: #0E7490; margin: 16px 0 8px; }
-  .doc p { margin: 8px 0; color: #334155; }
-  .doc ul, .doc ol { margin: 8px 0 8px 24px; color: #334155; }
+  .doc h3 { font-size: 15px; color: var(--ink); margin: 18px 0 8px; }
+  .doc h4, .doc h5, .doc h6 { font-size: 14px; color: #3A4048; margin: 14px 0 6px; }
+  .doc p { margin: 7px 0; color: var(--ink-body); }
+  .doc ul, .doc ol { margin: 7px 0 7px 24px; color: var(--ink-body); }
   .doc li { margin: 5px 0; }
-  strong { color: #1A365D; }
-  .footer { text-align: center; margin-top: 40px; padding-top: 20px;
-    border-top: 1px solid #E2E8F0; color: #94A3B8; font-size: 0.8rem; }
-  @media print { body { background: #fff; padding: 0; } .doc { border: none; box-shadow: none; } }
+  /* 重点只靠字重，不引色相 —— 与 AI 回答、教案保持同一规则 */
+  strong { color: var(--ink); font-weight: 700; }
+  .footer { text-align: center; margin-top: 36px; padding-top: 18px;
+    border-top: 1px solid var(--rule); color: #9CA3AF; font-size: 12px; }
+  /* 打印：保证纸质卷面干净，题目与选项不被跨页切断 */
+  @media print {
+    body { background: #fff; padding: 0; max-width: none; font-size: 12pt; }
+    .doc { border: none; box-shadow: none; border-radius: 0; padding: 0; }
+    h1, h2, h3 { break-after: avoid; }
+    p, li { break-inside: avoid; }
+  }
 """
 
 
