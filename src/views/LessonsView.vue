@@ -1458,9 +1458,17 @@ const currentCourse = computed(() =>
 // 新增资源时：把 mp4 放到 public/video/courses/、封面放到
 // public/video/courses/covers/，再把 slug 补进这个集合即可。
 const AVAILABLE_COVERS = new Set([
+  // 物理
+  "physics-1", "physics-2", "physics-3", "physics-4",
+  // 化学
+  "chem-1", "chem-2", "chem-3",
+  // 数学
   "math-1", "math-2", "math-3",
+  // 生物
   "biology-1", "biology-2", "biology-3",
-  "history-1",
+  // 历史
+  "history-1", "history-2", "history-3",
+  // 地理
   "geography-1", "geography-2", "geography-3",
 ]);
 function hasVideo(video) {
