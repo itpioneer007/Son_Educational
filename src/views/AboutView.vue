@@ -143,7 +143,7 @@ const team = [
         <div class="competition-card">
           <div class="competition-card__badge">竞赛项目</div>
           <h2>中国大学生服务外包创新创业大赛</h2>
-          <p>教育信息化创新赛道 · 多模态 AI 互动式教学智能体</p>
+          <p>教育信息化创新赛道 · 大模型驱动的中小学 AI 备课平台</p>
         </div>
       </section>
 
@@ -165,7 +165,7 @@ const team = [
       <div class="footer__inner">
         <div class="footer__brand">
           <strong>知启灵枢</strong>
-          <p>多模态 AI 互动式教学智能体</p>
+          <p>大模型驱动的中小学 AI 备课平台</p>
         </div>
         <div class="footer__links">
           <RouterLink to="/features">核心功能</RouterLink>

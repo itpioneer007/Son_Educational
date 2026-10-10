@@ -3317,7 +3317,7 @@ onUnmounted(() => {
         </RouterLink>
         <div class="sidebar__brand">
           <span class="sidebar__brand-name">核心功能</span>
-          <span class="sidebar__brand-sub">多模态教学创作工作台</span>
+          <span class="sidebar__brand-sub">AI 教学创作工作台</span>
         </div>
       </div>
 
