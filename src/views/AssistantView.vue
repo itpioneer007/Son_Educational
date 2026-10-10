@@ -1583,15 +1583,15 @@ watch(activeId, scrollToBottom);
   word-break: break-word;
 }
 
-/* H2 章节标题：左色条 + 主题色，突出"每个部分在讲什么" */
+/* H2 章节标题：左色条 + 中性浅底，只用结构标识，不抢正文颜色 */
 .message--assistant .message__bubble :deep(.markdown-body h2) {
-  margin: 18px 0 10px;
+  margin: 20px 0 10px;
   padding: 7px 12px;
   font-size: 1.02rem;
   font-weight: 700;
-  color: var(--accent-blue-dark);
-  background: rgba(37, 99, 235, 0.08);
-  border-left: 3px solid var(--accent-blue);
+  color: var(--ink);
+  background: #f4f5f7;
+  border-left: 3px solid #cbd0d8;
   border-radius: 6px;
   line-height: 1.4;
 }
@@ -1604,15 +1604,16 @@ watch(activeId, scrollToBottom);
   margin: 14px 0 8px;
   font-size: 0.96rem;
   font-weight: 700;
-  color: var(--accent-blue-dark);
+  color: var(--ink);
 }
 
-/* 核心加粗关键词：主题高亮 */
+/* 核心加粗关键词：只用字重与墨色区分层级，不引入额外色相 */
 .message--assistant .message__bubble :deep(.markdown-body strong) {
-  color: var(--accent-blue-dark);
+  color: var(--ink);
   font-weight: 700;
-  background: linear-gradient(transparent 62%, rgba(37, 99, 235, 0.18) 0);
-  padding: 0 1px;
+  background: #f1f2f4;
+  border-radius: 3px;
+  padding: 0 3px;
 }
 
 .message--assistant .message__bubble :deep(.markdown-body ul),
@@ -1628,26 +1629,26 @@ watch(activeId, scrollToBottom);
 .message--assistant .message__bubble :deep(.markdown-body hr) {
   margin: 14px 0;
   border: 0;
-  border-top: 1px dashed rgba(37, 99, 235, 0.25);
+  border-top: 1px dashed #d8dade;
 }
 
 .message--assistant .message__bubble :deep(.markdown-body code),
 .message--assistant .message__bubble :deep(.markdown-body pre) {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  background: rgba(37, 99, 235, 0.07);
+  background: #f4f5f7;
   border-radius: 5px;
 }
 
 .message--assistant .message__bubble :deep(.markdown-body code) {
   padding: 1px 5px;
   font-size: 0.88em;
-  color: #1d4ed8;
+  color: #3f4652;
 }
 
 .message--assistant .message__bubble :deep(.markdown-body pre) {
   padding: 10px 12px;
   overflow-x: auto;
-  border: 1px solid rgba(37, 99, 235, 0.12);
+  border: 1px solid #e4e5e8;
 }
 
 .message--assistant .message__bubble :deep(.markdown-body pre code) {
