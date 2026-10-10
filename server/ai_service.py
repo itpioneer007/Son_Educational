@@ -281,15 +281,58 @@ async def stream_ppt_content(
         yield delta
 
 
+def _feed_doc_line(line: str, km_lines):
+    """处理教案流的一行，返回 (可直接输出的文本, 新的小节缓冲状态)。"""
+    stripped = line.strip()
+    if km_lines is None:
+        if _DOC_KM_SECTION.match(stripped):
+            return "", [line]  # 进入「教学重难点」小节，改为缓冲
+        return line + "\n", None
+    if _DOC_SECTION_HEAD.match(stripped):
+        # 小节结束：先吐规整结果，当前标题行随之直通
+        done = normalize_doc_km_labels("\n".join(km_lines))
+        return done + "\n" + line + "\n", None
+    km_lines.append(line)
+    return "", km_lines
+
+
+async def _stream_doc_with_km_fix(agen):
+    """按行转发教案流，仅对「教学重难点」小节做缓冲后规整。
+
+    normalize_doc_km_labels 需要看完整小节才能判断保留几条重点/难点，
+    所以进入该小节时先缓冲、遇到下一个标题再规整输出；小节之外的正文
+    逐行直通，保持真正的流式节奏。
+
+    旧实现是「全文缓冲后一次性 yield」，UI 上表现为进度长时间停在起点、
+    随后整篇突然出现。这里改为只缓冲一个小节（几行），首字延迟可忽略。
+    """
+    buf = ""         # 尚未成行的残余片段
+    km_lines = None  # 非 None 表示正在缓冲「教学重难点」小节
+    async for delta in agen:
+        buf += delta
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            out, km_lines = _feed_doc_line(line, km_lines)
+            if out:
+                yield out
+    # 收尾：小节内的残余行要并入缓冲一起规整，避免输出顺序错乱
+    if km_lines is not None:
+        if buf:
+            km_lines.append(buf)
+            buf = ""
+        yield normalize_doc_km_labels("\n".join(km_lines)) + "\n"
+    if buf:
+        yield buf
+
+
 async def stream_doc_content(
     subject: str, topic: str, grade: str = "", requirements: str = "",
     revision: str = "",
 ):
     """流式生成教案文档（Markdown）；revision 为用户在问答区提出的修改意见
 
-    「教学重难点」小节的标签规整需要看到整段才能判断（要统计同类标签数量、
-    做合并），因此这里**先缓冲全文、规整后再一次性吐出**；其余正文仍是
-    流式的，只是 UI 上首字延迟略增。教案正文通常 2~4KB，缓冲成本可忽略。
+    正文整体保持流式；仅「教学重难点」小节在内部短暂缓冲以便做标签规整
+    （见 _stream_doc_with_km_fix），不再全文缓冲。
     """
     user_prompt = f"""请为以下课程编写完整教案：
 
@@ -300,10 +343,15 @@ async def stream_doc_content(
 """
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    buf = []
-    async for delta in call_deepseek_stream(DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL):
-        buf.append(delta)
-    yield normalize_doc_km_labels("".join(buf))
+
+    async def _raw():
+        async for delta in call_deepseek_stream(
+            DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL
+        ):
+            yield delta
+
+    async for out in _stream_doc_with_km_fix(_raw()):
+        yield out
 
 
 async def stream_quiz_content(
