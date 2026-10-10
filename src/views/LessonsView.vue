@@ -2207,23 +2207,7 @@ watch(activeMenu, (newVal) => {
               <div class="home-hero">
                 <div class="home-hero-badge">教学工具集</div>
                 <h1 class="home-hero-title">
-                  <span class="float-cap">
-                    <svg
-                      width="24"
-                      height="24"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="#4c7dff"
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-                      <path
-                        d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"
-                      />
-                    </svg>
-                  </span>
+                  <span class="float-cap">🎓</span>
                   课堂教程
                 </h1>
                 <p class="home-hero-subtitle">
@@ -4176,6 +4160,10 @@ watch(activeMenu, (newVal) => {
 
 .float-cap {
   display: inline-block;
+  font-size: 0.92em;
+  line-height: 1;
+  vertical-align: -0.06em;
+  margin-right: 10px;
 }
 
 .home-hero-subtitle {
