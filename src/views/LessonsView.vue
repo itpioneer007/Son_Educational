@@ -2855,7 +2855,7 @@ watch(activeMenu, (newVal) => {
                             配套备课资源
                           </span>
                           <span class="video-kit-hint"
-                            >由知课 AI 生成 · 稍作修改即可使用</span
+                            >由知启灵枢 AI 生成 · 稍作修改即可使用</span
                           >
                         </div>
                         <div class="video-kit-btns">

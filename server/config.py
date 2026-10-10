@@ -65,7 +65,7 @@ QUIZ_MODEL = os.getenv("QUIZ_MODEL") or DEEPSEEK_MODEL
 EXAM_MODEL = os.getenv("EXAM_MODEL") or DEEPSEEK_MODEL
 
 # Qwen 对话配置 —— 阿里云百炼 DashScope（OpenAI 兼容接口）
-# 用于「知课 AI 备课助手」对话；课件/教案/出题/试卷仍走 DeepSeek
+# 用于「知启灵枢 教师 AI 助手」对话；课件/教案/出题/试卷仍走 DeepSeek
 # 注册获取 Key: https://bailian.console.aliyun.com/
 # 凭据读取方式同上：环境变量 > server/config.local.py
 # ==================================================================
