@@ -3,6 +3,12 @@ import { ref, computed, onMounted } from "vue";
 import PostCard from "../components/community/PostCard.vue";
 import SiteNav from "../components/layout/SiteNav.vue";
 import { useCommunity } from "../composables/useCommunity.js";
+import {
+  dateKey,
+  seededInt,
+  growingCount,
+  formatCount,
+} from "../utils/demoData.js";
 
 const { getPosts, addPost } = useCommunity();
 
@@ -11,23 +17,9 @@ const expandedId = ref(null);
 const toast = ref("");
 const showForm = ref(false);
 
-// 搜索关键词
+// 搜索关键词（输入即时过滤，回车/按钮给出结果条数反馈）
 const searchQuery = ref("");
 const hotSearches = ["翻转课堂", "新课导入", "物理交互动画", "课堂管理"];
-
-const recentViews = ref([
-  { id: 1, title: "如何设计「先破后立」的历史课导入？", time: "10分钟前" },
-  { id: 2, title: "物理实验课的可交互演示动画怎么做？", time: "1小时前" },
-  { id: 3, title: "公开课中数字化工具的使用经验分享", time: "3小时前" },
-]);
-
-const hotRecommendations = ref([
-  { id: 1, title: "2026年热门教学工具盘点与对比...", reads: "2.3w" },
-  { id: 2, title: "课堂提问技巧：从封闭式到开放式...", reads: "1.9w" },
-  { id: 3, title: "高中历史公开课破冰高分案例分享...", reads: "1.5w" },
-  { id: 4, title: "教研组联名推荐：10个宝藏教师网站...", reads: "1.2w" },
-  { id: 5, title: "分层作业设计的思路与实践...", reads: "1.1w" },
-]);
 
 const newPost = ref({
   tag: "教学讨论",
@@ -46,14 +38,33 @@ const contentTabs = [
   { key: "case", label: "优秀案例" },
 ];
 
+// 资源下载量按「天」缓慢增长：演示环境里不会动，但每天打开数字都在涨，
+// 比写死的 386 / 254 / 612 更像真实平台。
 const featuredResources = [
-  { title: "高中物理·力的合成交互动画", type: "课件素材", downloads: 386 },
-  { title: "语文阅读课小组任务单模板", type: "教案模板", downloads: 254 },
-  { title: "AI 课堂提示词结构化模板", type: "Prompt 库", downloads: 612 },
-];
+  { title: "高中物理·力的合成交互动画", type: "课件素材", seed: "res-physics" },
+  { title: "语文阅读课小组任务单模板", type: "教案模板", seed: "res-chinese" },
+  { title: "AI 课堂提示词结构化模板", type: "Prompt 库", seed: "res-prompt" },
+].map((item, i) => ({
+  ...item,
+  downloads: growingCount(item.seed, 180 + i * 90, 3, 30) + i * 60,
+}));
 
-const posts = computed(() => getPosts(filter.value));
 const allPosts = computed(() => getPosts("all"));
+
+// 帖子列表：按筛选条件取，再叠加搜索关键词（标题 / 正文 / 作者 / 分类）。
+// 直接依赖 searchQuery，输入即时过滤，不用等回车。
+const posts = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  const list = getPosts(filter.value);
+  if (!q) return list;
+  return list.filter(
+    (p) =>
+      (p.title || "").toLowerCase().includes(q) ||
+      (p.content || "").toLowerCase().includes(q) ||
+      (p.author || "").toLowerCase().includes(q) ||
+      (p.tag || "").toLowerCase().includes(q),
+  );
+});
 
 const communityStats = computed(() => [
   { value: allPosts.value.length, label: "共创话题" },
@@ -67,11 +78,36 @@ const communityStats = computed(() => [
   },
 ]);
 
-const topicLanes = [
-  { title: "备课共创", desc: "课件结构、教案骨架、课堂节奏", tone: "blue" },
-  { title: "互动实验", desc: "课堂提问、投票、演示动画脚本", tone: "cyan" },
-  { title: "资料融合", desc: "PDF、图片、校本模板使用方法", tone: "green" },
-];
+// 今日热度 = 日常基线（按日期做种子，天天不同、当天稳定）+ 当天真实新增互动
+const todayHeat = computed(() => {
+  const key = dateKey();
+  const todayPosts = allPosts.value.filter(
+    (p) => dateKey(p.createdAt) === key,
+  ).length;
+  const todayComments = allPosts.value.reduce(
+    (n, p) =>
+      n + (p.comments || []).filter((c) => dateKey(c.createdAt) === key).length,
+    0,
+  );
+  const base = seededInt(`community-heat:${key}`, 78, 92);
+  return Math.min(99, base + todayPosts * 5 + todayComments * 3);
+});
+
+// 热门推荐：取社区里互动最多的帖子（真实数据），
+// 浏览量用按天增长的确定性算法推算，看起来像真的在涨。
+const hotRecommendations = computed(() =>
+  [...allPosts.value]
+    .sort(
+      (a, b) =>
+        b.likes + b.comments.length * 2 - (a.likes + a.comments.length * 2),
+    )
+    .slice(0, 5)
+    .map((post) => ({
+      id: post.id,
+      title: post.title,
+      reads: formatCount(growingCount(`post-views:${post.id}`, 900, 8, 25)),
+    })),
+);
 
 const activeTeachers = [
   { name: "王老师", field: "高中历史", work: "情境导入案例" },
@@ -139,14 +175,26 @@ function submitPost() {
 }
 
 function handleSearch() {
-  if (searchQuery.value.trim()) {
-    showToast(`正在搜索: ${searchQuery.value}`);
+  const term = searchQuery.value.trim();
+  if (!term) {
+    showToast("已显示全部话题");
+    return;
   }
+  const count = posts.value.length;
+  showToast(
+    count ? `找到 ${count} 条相关话题` : `没有找到「${term}」相关话题`,
+  );
 }
 
-function clearRecentViews() {
-  recentViews.value = [];
-  showToast("记录已清除");
+function clearSearch() {
+  searchQuery.value = "";
+}
+
+// 点击热榜条目 → 直接把搜索词设成该帖标题，列表即时筛出这一条
+function openHotPost(item) {
+  filter.value = "all";
+  searchQuery.value = item.title;
+  showToast("已筛选出该话题");
 }
 
 onMounted(() => {
@@ -186,7 +234,7 @@ onMounted(() => {
             <span>{{ item.label }}</span>
           </div>
           <div class="stats-pill stats-pill--heat">
-            <strong>92%</strong>
+            <strong>{{ todayHeat }}%</strong>
             <span>今日热度</span>
           </div>
         </div>
@@ -329,9 +377,21 @@ onMounted(() => {
           </div>
 
           <div v-else class="empty">
-            <p>暂无内容</p>
-            <button class="btn btn--ghost" @click="filter = 'all'">
-              查看全部话题
+            <p>
+              {{
+                searchQuery.trim()
+                  ? `没有找到「${searchQuery.trim()}」相关话题`
+                  : "暂无内容"
+              }}
+            </p>
+            <button
+              class="btn btn--ghost"
+              @click="
+                filter = 'all';
+                clearSearch();
+              "
+            >
+              {{ searchQuery.trim() ? "清除搜索" : "查看全部话题" }}
             </button>
           </div>
         </div>
@@ -520,6 +580,10 @@ onMounted(() => {
                 v-for="(item, idx) in hotRecommendations"
                 :key="item.id"
                 class="recommend-item"
+                role="button"
+                tabindex="0"
+                @click="openHotPost(item)"
+                @keyup.enter="openHotPost(item)"
               >
                 <div class="recommend-left">
                   <span class="rank-num" :class="'rank-' + (idx + 1)">{{
@@ -1102,6 +1166,15 @@ onMounted(() => {
   align-items: center;
   font-size: 0.875rem;
   gap: 10px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.recommend-item:hover {
+  background: rgba(76, 125, 255, 0.06);
 }
 
 .item-title {
