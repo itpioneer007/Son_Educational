@@ -75,9 +75,10 @@ watch(contentLength, async () => {
   await nextTick();
   const el = listRef.value;
   if (!el) return;
-  // 仅在接近底部时自动跟随，避免打断用户向上翻阅
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
-    el.scrollTop = el.scrollHeight;
+  // 正文区已随内容自适应高度、不再内部滚动，「跟随到底」因此改为跟随页面。
+  // 仅当内容末尾仍在视口内（读者处于跟随状态）时才滚，避免打断向上翻阅。
+  if (el.getBoundingClientRect().bottom <= window.innerHeight + 200) {
+    el.lastElementChild?.scrollIntoView({ behavior: "auto", block: "end" });
   }
 });
 </script>
@@ -241,9 +242,9 @@ watch(contentLength, async () => {
   gap: 12px;
   flex: 1;
   min-height: 220px;
-  max-height: 46vh;
   padding: 18px 20px;
-  overflow-y: auto;
+  /* 不设 max-height：正文有多长面板就撑多高，跟着内容往下走；
+     旧写法 max-height:46vh + overflow-y:auto 会把内容锁在固定高度的框里内滚 */
   overscroll-behavior: contain;
 }
 
