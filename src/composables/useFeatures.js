@@ -45,7 +45,6 @@ const TYPE_LABELS = {
   ppt: '课件生成',
   doc: '教案生成',
   interactive: '教学题生成',
-  animation: '知识动画',
 }
 
 const STATUS_LABELS = {
