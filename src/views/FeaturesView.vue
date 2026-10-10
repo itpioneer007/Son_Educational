@@ -20,6 +20,7 @@ import ContentRevisePanel from "../components/ContentRevisePanel.vue";
 import FormWizard from "../components/FormWizard.vue";
 import TemplateMarket from "../components/TemplateMarket.vue";
 import { SPARK_TEMPLATES_API, apiUrl } from "../config/api.js";
+import { dateKey, shortDate, seededInt } from "../utils/demoData.js";
 
 const route = useRoute();
 
@@ -874,21 +875,41 @@ const overviewCards = computed(() => [
   },
 ]);
 
-// 本周创作趋势数据
+// 本周创作趋势 —— 直接从教学档案（history）按自然日聚合，日期取真实的滚动 7 天
 const trendItems = computed(() => {
-  const labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-  const dates = ["05.22", "05.23", "05.24", "05.25", "05.26", "05.27", "05.28"];
-  const values = [3, 5, 4, 7, 6, 8, 7];
+  const records = history.value || [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (6 - i));
+    return d;
+  });
+
+  const counts = days.map(
+    (d) => records.filter((r) => dateKey(r.createdAt) === dateKey(d)).length,
+  );
+
+  // 档案为空（首次进入演示环境）时给一条稳定的基线曲线：用「日期」当种子，
+  // 同一天刷新看到的是同一条曲线，不会每次跳变（这正是乱数一眼假的原因）。
+  const hasData = counts.some((c) => c > 0);
+  const values = counts.map((c, i) =>
+    hasData ? c : seededInt(`trend:${dateKey(days[i])}`, 2, 8),
+  );
+
   const max = Math.max(...values);
   const min = Math.min(...values);
 
-  return labels.map((label, index) => ({
-    label,
-    date: dates[index],
+  return days.map((d, index) => ({
+    key: dateKey(d),
+    label: weekdays[d.getDay()],
+    date: shortDate(d),
+    fullDate: `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`,
     value: values[index],
     x: 50 + index * 68,
     y: 175 - ((values[index] - min) / (max - min || 1)) * 110,
-    fullDate: `2024年${dates[index]}`,
   }));
 });
 
@@ -901,11 +922,18 @@ const trendStats = computed(() => {
   const maxIndex = values.indexOf(maxValue);
   const maxDay = trendItems.value[maxIndex]?.label || "-";
 
+  // 覆盖学科取自真实档案；没有档案时退回稳定的演示集合
+  const subjects = [
+    ...new Set(
+      (history.value || []).map((item) => item.subject).filter(Boolean),
+    ),
+  ].slice(0, 3);
+
   return {
     total,
     avg,
     maxDay,
-    subjects: ["物理", "数学", "化学"],
+    subjects: subjects.length ? subjects : ["物理", "数学", "化学"],
   };
 });
 
@@ -922,37 +950,60 @@ const weeklyAreaPath = computed(
 // 选中的日期详情
 const selectedDay = ref(null);
 
-// 获取某天的创作详情
+// 获取某天的创作详情：当天有真实档案就直接展示真实条目；否则用「日期」做种子
+// 生成稳定的演示条目 —— 同一天多次点开内容一致（乱数会让每次都不一样，很假）。
 function getDayDetails(dayData) {
+  const seedKey = dayData.key || dayData.label || "day";
   const daySubjects = ["物理", "数学", "化学"];
   const dayTypes = ["课件", "教案", "教学题"];
   const dayTypesEn = ["ppt", "doc", "interactive"];
 
-  // 生成更真实的课件数据
-  const items = Array.from({ length: dayData.value }, (_, i) => {
-    const typeIndex = i % 3;
-    const subjectIndex = (i + Math.floor(dayData.value / 2)) % 3;
-    return {
-      id: i,
-      title: generateCoursewareTitle(
-        daySubjects[subjectIndex],
-        dayTypes[typeIndex],
-        i,
-      ),
-      type: dayTypes[typeIndex],
-      typeEn: dayTypesEn[typeIndex],
-      subject: daySubjects[subjectIndex],
-      time: generateTime(i),
-      aiScore: Math.floor(85 + Math.random() * 12), // AI评分 85-96
-      completeness: Math.floor(88 + Math.random() * 10), // 完整度
-    };
-  });
+  const realRecords = (history.value || []).filter(
+    (r) => dateKey(r.createdAt) === seedKey,
+  );
 
-  // 计算类型分布
+  const items = realRecords.length
+    ? realRecords.map((r, i) => ({
+        id: r.id || i,
+        title: r.title,
+        type: (TYPE_LABELS[r.type] || "内容").replace("生成", ""),
+        typeEn: r.type,
+        subject: r.subject || "未分类",
+        time: generateTime(i, seedKey),
+        aiScore: seededInt(`score:${seedKey}:${i}`, 86, 96),
+        completeness: seededInt(`complete:${seedKey}:${i}`, 88, 98),
+      }))
+    : Array.from({ length: dayData.value }, (_, i) => {
+        const typeIndex = i % 3;
+        const subjectIndex = (i + Math.floor(dayData.value / 2)) % 3;
+        return {
+          id: i,
+          title: generateCoursewareTitle(
+            daySubjects[subjectIndex],
+            dayTypes[typeIndex],
+            i,
+          ),
+          type: dayTypes[typeIndex],
+          typeEn: dayTypesEn[typeIndex],
+          subject: daySubjects[subjectIndex],
+          time: generateTime(i, seedKey),
+          aiScore: seededInt(`score:${seedKey}:${i}`, 86, 96),
+          completeness: seededInt(`complete:${seedKey}:${i}`, 88, 98),
+        };
+      });
+
+  // 计算类型分布（试卷归入「教学题」一族，与前端其它处的归档口径保持一致）
+  const countByType = (typeKey) =>
+    items.filter(
+      (i) =>
+        i.typeEn === typeKey ||
+        (typeKey === "interactive" && i.typeEn === "exam"),
+    ).length;
+
   const typeDistribution = {
-    ppt: items.filter((i) => i.type === "课件").length,
-    doc: items.filter((i) => i.type === "教案").length,
-    interactive: items.filter((i) => i.type === "教学题").length,
+    ppt: countByType("ppt"),
+    doc: countByType("doc"),
+    interactive: countByType("interactive"),
   };
 
   // 计算学科分布
@@ -975,8 +1026,8 @@ function getDayDetails(dayData) {
     avgScore: Math.round(
       items.reduce((sum, i) => sum + i.aiScore, 0) / items.length,
     ),
-    totalTime: items.length * 15 + Math.floor(Math.random() * 30), // 预估总耗时
-    peakHour: ["09:00", "14:00", "20:00"][Math.floor(Math.random() * 3)],
+    totalTime: items.length * 15 + seededInt(`spent:${seedKey}`, 0, 30), // 预估总耗时
+    peakHour: ["09:00", "14:00", "20:00"][seededInt(`peak:${seedKey}`, 0, 2)],
   };
 }
 
@@ -1006,11 +1057,11 @@ function generateCoursewareTitle(subject, type, index) {
   );
 }
 
-// 生成时间
-function generateTime(index) {
+// 生成时间（按天做种子，保证同一天的条目时间稳定不跳）
+function generateTime(index, seedKey = "") {
   const hours = [8, 9, 10, 14, 15, 16, 19, 20, 21];
   const hour = hours[index % hours.length];
-  const minute = Math.floor(Math.random() * 6) * 10;
+  const minute = seededInt(`time:${seedKey}:${index}`, 0, 5) * 10;
   return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
 }
 
@@ -1169,44 +1220,44 @@ const overviewQueue = computed(() =>
 );
 
 // 最近生成轨迹 - 教学产出趋势（堆叠柱状图）
+// 按自然日分桶统计（原先用 createdAt >= cutoff 是累计值，越靠后越高，不真实），
+// 日期取真实的滚动 7 天；档案为空时用日期做种子给稳定基线。
 const recentTrajectoryData = computed(() => {
-  const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-  const today = new Date().getDay() || 7;
-  const ordered = [...days.slice(today), ...days.slice(0, today)].slice(0, 7);
-
-  // 基于真实教学场景：ppt=课件制作, doc=教案编写, interactive=课堂练习
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
   const allRecords = history.value || [];
-  const baseData = ordered.map((label, i) => {
-    const cutoff = Date.now() - (6 - i) * 86400000;
-    const recent = allRecords.filter((r) => r.createdAt >= cutoff);
-    return {
-      label,
-      date: `${5 + i}.22`,
-      ppt:
-        recent.filter((r) => r.type === "ppt").length ||
-        Math.max(1, Math.round(2 + Math.sin(i * 0.8) * 2 + Math.random() * 3)),
-      doc:
-        recent.filter((r) => r.type === "doc").length ||
-        Math.max(
-          0,
-          Math.round(1 + Math.cos(i * 0.6) * 1.5 + Math.random() * 2),
-        ),
-      interactive:
-        recent.filter((r) => r.type === "interactive").length ||
-        Math.max(0, Math.round(1 + Math.sin(i * 1.2) * 1 + Math.random() * 2)),
-    };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (6 - i));
+    return d;
   });
 
-  if (baseData.every((d) => d.ppt + d.doc + d.interactive < 3)) {
-    return ordered.map((label, i) => ({
-      label,
-      date: `${5 + i}.22`,
-      ppt: 3 + Math.floor(Math.random() * 5),
-      doc: 1 + Math.floor(Math.random() * 4),
-      interactive: 1 + Math.floor(Math.random() * 3),
-    }));
-  }
-  return baseData;
+  const countOn = (day, typeKey) =>
+    allRecords.filter(
+      (r) =>
+        dateKey(r.createdAt) === dateKey(day) &&
+        (r.type === typeKey || (typeKey === "interactive" && r.type === "exam")),
+    ).length;
+
+  const hasData = allRecords.some((r) =>
+    days.some((d) => dateKey(r.createdAt) === dateKey(d)),
+  );
+
+  return days.map((d) => {
+    const key = dateKey(d);
+    return {
+      label: weekdays[d.getDay()],
+      date: shortDate(d),
+      key,
+      ppt: hasData ? countOn(d, "ppt") : seededInt(`traj:ppt:${key}`, 2, 6),
+      doc: hasData ? countOn(d, "doc") : seededInt(`traj:doc:${key}`, 1, 5),
+      interactive: hasData
+        ? countOn(d, "interactive")
+        : seededInt(`traj:int:${key}`, 1, 4),
+    };
+  });
 });
 
 // 柱状图布局计算（段间留缝隙 + 四角圆角）
