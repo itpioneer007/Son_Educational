@@ -16,6 +16,7 @@ from pptx.enum.shapes import MSO_SHAPE
 from docx import Document
 from docx.shared import Pt as DocxPt, RGBColor as DocxRGB, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -842,10 +843,17 @@ def generate_docx_from_markdown(md: str, meta: dict, uid: str = "") -> tuple:
     """把确认后的 Markdown 教案渲染为 DOCX（所见即所得）。"""
     doc = Document()
     section = doc.sections[0]
+    # 纸张统一为国内公文标准 A4（python-docx 默认是 Letter 21.59×27.94cm，
+    # 直接打印会留不规则白边），并固定纵向、行宽与页边距
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
+    section.orientation = WD_ORIENT.PORTRAIT
     section.top_margin = Cm(2.4)
     section.bottom_margin = Cm(2.4)
     section.left_margin = Cm(2.6)
     section.right_margin = Cm(2.6)
+    section.header_distance = Cm(1.5)
+    section.footer_distance = Cm(1.5)
 
     # 正文基线：宋体 + _SZ_BODY（此前是 Microsoft YaHei 11pt，与标题黑体脱节）
     normal = doc.styles['Normal']
