@@ -4,6 +4,7 @@ API 兼容 OpenAI 格式，价格 ¥1/百万 token (输入), ¥2/百万 (输出)
 """
 
 import json
+import re
 import httpx
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
@@ -53,8 +54,8 @@ DOC_SYSTEM_PROMPT = """你是一位资深教学设计专家，擅长编写高质
 - 情感态度与价值观：……
 
 ## 教学重难点
-- 重点：……
-- 难点：……
+- 重点：……（可拆为「重点 1 / 重点 2」，但**标签必须写「重点」**）
+- 难点：……（**标签必须写「难点」**）
 
 ## 教学准备
 - ……
@@ -83,7 +84,12 @@ DOC_SYSTEM_PROMPT = """你是一位资深教学设计专家，擅长编写高质
 2. `##` 为一级栏目，`###` 为「教学过程设计」下的环节
 3. 教学过程各环节必须标注时间分配
 4. 教学目标须涵盖知识与技能、过程与方法、情感态度与价值观三个维度
-5. 内容具体、可操作，符合新课标要求；只输出上述结构，不要额外说明"""
+5. **「教学重难点」小节只允许出现两类标签：「重点」与「难点」。**
+   - 「重点」条目最多 2 条，超过则合并为一条；
+   - 「难点」条目恰好 1 条；
+   - 严禁把第 2 条重点写成「难点」，也严禁出现两条都标「重点」的情况。
+   - 每条前缀格式固定为 `- 重点：` 或 `- 难点：`，不得混用其他字样。
+6. 内容具体、可操作，符合新课标要求；只输出上述结构，不要额外说明"""
 
 
 # ── 题目生成 Prompt ──────────────────────────────────────────────
@@ -195,6 +201,67 @@ async def call_deepseek_stream(system_prompt: str, user_prompt: str, model: str 
                     yield delta
 
 
+# ── 教案正文后处理（确定性修正，不依赖模型是否听话）────────────────
+
+_DOC_KM_SECTION = re.compile(r'^##\s*教学重难点\s*$')
+_DOC_KM_LABEL = re.compile(r'^(\s*[-*]\s*)(重点|难点)\s*[:：]\s*(.*)$')
+_DOC_SECTION_HEAD = re.compile(r'^#{1,6}\s')
+
+
+def normalize_doc_km_labels(md: str) -> str:
+    """修正「教学重难点」小节的标签重复问题。
+
+    LLM 常把第 2 条重点误写成「难点」，或连续两条都标「重点」。
+    这里做确定性规整（纯文本层，不调模型）：
+      1. 该小节内只保留 1 条「难点」，多余的降级合并进「重点」；
+      2. 「重点」最多 2 条，超出部分合并进第 1 条；
+      3. 标签统一为 `- 重点：` / `- 难点：`。
+    小节外的内容原样保留。
+    """
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    out, i, n = [], 0, len(lines)
+    while i < n:
+        if not _DOC_KM_SECTION.match(lines[i].strip()):
+            out.append(lines[i])
+            i += 1
+            continue
+
+        out.append(lines[i])
+        i += 1
+        # 收集小节体内所有条目（直到下一个标题行为止）
+        body, body_idx = [], []
+        while i < n and not _DOC_SECTION_HEAD.match(lines[i].strip()):
+            body.append(lines[i])
+            body_idx.append(len(out))
+            out.append(lines[i])
+            i += 1
+
+        points, hard = [], []
+        for raw in body:
+            m = _DOC_KM_LABEL.match(raw)
+            if not m:
+                continue
+            label, text = m.group(2), m.group(3).strip()
+            (points if label == "重点" else hard).append(text)
+
+        if not (points or hard):
+            continue
+
+        # 难点恰好 1 条：多余的并入重点
+        if len(hard) > 1:
+            points.extend(hard[1:])
+            hard = hard[:1]
+        # 重点最多 2 条：多余的合并进第 1 条
+        if len(points) > 2:
+            points = [points[0] + "；" + "；".join(points[1:])]
+
+        rebuilt = [f"- 重点：{t}" for t in points] + [f"- 难点：{t}" for t in hard]
+        # 原位回填：保留原条目行位，多余的覆盖、不足的置空（避免破坏行号）
+        for k, idx in enumerate(body_idx):
+            out[idx] = rebuilt[k] if k < len(rebuilt) else ""
+    return "\n".join(out)
+
+
 async def stream_ppt_content(
     subject: str, topic: str, grade: str = "", style: str = "", outline: str = "",
     revision: str = "",
@@ -218,7 +285,12 @@ async def stream_doc_content(
     subject: str, topic: str, grade: str = "", requirements: str = "",
     revision: str = "",
 ):
-    """流式生成教案文档（Markdown）；revision 为用户在问答区提出的修改意见"""
+    """流式生成教案文档（Markdown）；revision 为用户在问答区提出的修改意见
+
+    「教学重难点」小节的标签规整需要看到整段才能判断（要统计同类标签数量、
+    做合并），因此这里**先缓冲全文、规整后再一次性吐出**；其余正文仍是
+    流式的，只是 UI 上首字延迟略增。教案正文通常 2~4KB，缓冲成本可忽略。
+    """
     user_prompt = f"""请为以下课程编写完整教案：
 
 学科：{subject}
@@ -228,8 +300,10 @@ async def stream_doc_content(
 """
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
+    buf = []
     async for delta in call_deepseek_stream(DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL):
-        yield delta
+        buf.append(delta)
+    yield normalize_doc_km_labels("".join(buf))
 
 
 async def stream_quiz_content(
