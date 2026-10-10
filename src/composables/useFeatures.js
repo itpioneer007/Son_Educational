@@ -1,4 +1,6 @@
-const STORAGE_KEY = 'zhike-features-history'
+import { storageKey } from '../config/storage.js'
+
+const STORAGE_KEY = storageKey('features-history')
 
 const SEED_HISTORY = [
   {

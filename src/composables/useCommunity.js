@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
+import { storageKey } from '../config/storage.js'
 
-const STORAGE_KEY = 'zhike-community-data'
+const STORAGE_KEY = storageKey('community-data')
 
 const VISUAL_PRESETS = {
   教学讨论: {

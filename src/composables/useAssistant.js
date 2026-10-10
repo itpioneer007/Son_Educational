@@ -1,8 +1,9 @@
 import { reactive } from "vue";
 import { CHAT_API } from "../config/api.js";
+import { storageKey } from "../config/storage.js";
 
-const STORAGE_KEY = "zhike-assistant-sessions";
-const ACTIVE_KEY = "zhike-assistant-active";
+const STORAGE_KEY = storageKey("assistant-sessions");
+const ACTIVE_KEY = storageKey("assistant-active");
 
 function uid(prefix = "s") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;

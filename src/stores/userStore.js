@@ -1,6 +1,7 @@
 import { reactive } from "vue";
+import { storageKey } from "../config/storage.js";
 
-const STORAGE_KEY = "zhike-user-profile";
+const STORAGE_KEY = storageKey("user-profile");
 
 function load() {
   try {

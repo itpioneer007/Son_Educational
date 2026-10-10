@@ -2,6 +2,9 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { navItems, userNavItems } from "../../config/nav.js";
+import { storageKey } from "../../config/storage.js";
+
+const USER_KEY = storageKey("user");
 
 const route = useRoute();
 const menuOpen = ref(false);
@@ -101,7 +104,7 @@ function submitLogin() {
   }
 
   user.value = { account: "admin" };
-  localStorage.setItem("zhike-user", JSON.stringify(user.value));
+  localStorage.setItem(USER_KEY, JSON.stringify(user.value));
   loginOpen.value = false;
   loginError.value = "";
 }
@@ -113,12 +116,12 @@ function toggleUserMenu() {
 function logout() {
   user.value = null;
   userMenuOpen.value = false;
-  localStorage.removeItem("zhike-user");
+  localStorage.removeItem(USER_KEY);
 }
 
 function loadUser() {
   try {
-    const raw = localStorage.getItem("zhike-user");
+    const raw = localStorage.getItem(USER_KEY);
     if (raw) user.value = JSON.parse(raw);
   } catch {
     user.value = null;
