@@ -11,9 +11,9 @@ const showcaseItems = [
   {
     id: 1,
     title: "AI 智能备课",
-    subtitle: "输入主题，一键生成完整教案",
+    subtitle: "描述课题，一键生成教案与课件初稿",
     description:
-      "上传教案或参考文档，系统自动分析知识结构并生成课件初稿。<em>支持 PDF/Word</em> 多格式输入，<em>AI 辅助撰写</em>教学流程与活动设计。",
+      "填写学科、课题与教学要求，AI 自动生成结构完整的教案与课件初稿。<em>DeepSeek 驱动</em>，覆盖导入、讲授、练习到板书全流程。",
     icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.5 6.5L20 10l-6.5 1.5L12 18l-1.5-6.5L4 10l6.5-1.5z"/><circle cx="19" cy="19" r="3"/><path d="M17 19h4"/></svg>`,
     gradient: "linear-gradient(135deg, #f97316 0%, #ef4444 50%, #f43f5e 100%)",
     accent: "#f97316",
@@ -24,9 +24,9 @@ const showcaseItems = [
   {
     id: 2,
     title: "课件管理",
-    subtitle: "海量精美模版，一键套用生成课件",
+    subtitle: "精美模版一键套用，生成即用",
     description:
-      "管理所有已生成的课件与教案，支持 <em>PPT / Word / 互动游戏</em> 三种格式一键导出。<em>5 套预设风格模版</em>，AI 自动匹配学科，只改内容不改设计。",
+      "统一管理已生成的课件、教案、练习题与试卷，支持 <em>PPTX / DOCX / HTML</em> 一键导出。<em>5 套本地精美模版</em>，按学科自动匹配，只改内容不改设计。",
     icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>`,
     gradient: "linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)",
     accent: "#10b981",
@@ -39,7 +39,7 @@ const showcaseItems = [
     title: "数据分析",
     subtitle: "教学趋势，可视化图表洞察",
     description:
-      "<em>课件创作统计</em>仪表盘，以图表展示备课量趋势与内容类型分布。<em>日 / 周 / 月 / 年</em> 多维度筛选，辅助教学规划。",
+      "<em>创作统计</em>仪表盘，以图表展示备课量趋势与内容类型分布。按 <em>今天 / 近 7 天 / 近 30 天 / 本季度</em> 多维度筛选，辅助教学规划。",
     icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="14" width="4" height="6" rx="1"/><rect x="10" y="8" width="4" height="12" rx="1"/><rect x="16" y="3" width="4" height="17" rx="1"/></svg>`,
     gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 50%, #b45309 100%)",
     accent: "#f59e0b",
@@ -50,7 +50,7 @@ const showcaseItems = [
   {
     id: 4,
     title: "教学社区",
-    subtitle: "分享经验，与全国教师互动交流",
+    subtitle: "分享经验，与同行教师互动交流",
     description:
       "<em>教师教研社区</em>，发布教学话题与资源分享。支持 <em>点赞 / 评论 / 收藏</em> 互动，按学科分类浏览，与同行交流实践心得。",
     icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3.3 2.2-6 5-6h2c2.8 0 5 2.7 5 6"/><path d="M14 14c2.8 0 5 2.7 5 6"/></svg>`,
@@ -117,18 +117,10 @@ function stopAutoPlay() {
 }
 
 const lessonHighlights = [
-  { value: "PPT / Word / 互动课件", label: "三格式一键导出", color: "#4c7dff" },
-  { value: "5 套风格模版", label: "中国风·春天·历史等", color: "#23c3b2" },
-  { value: "PDF / Word / 图片", label: "参考文档智能识别", color: "#8b5cf6" },
+  { value: "4 类教学材料", label: "课件·教案·练习·试卷", color: "#4c7dff" },
+  { value: "5 套精美模版", label: "中国风·春天·历史等", color: "#23c3b2" },
+  { value: "双模型驱动", label: "DeepSeek + 通义千问", color: "#8b5cf6" },
 ];
-
-const materialCards = [
-  { type: "PDF", title: "教材章节", meta: "已提炼知识结构" },
-  { type: "IMG", title: "实验图片", meta: "转为课件视觉素材" },
-  { type: "DOC", title: "校本模板", meta: "保留学校格式" },
-];
-
-const workflowSteps = ["理解意图", "融合资料", "生成初稿", "反馈迭代"];
 
 function onPointerMove(e) {
   mouse.value = {
@@ -164,9 +156,9 @@ onUnmounted(() => {
           </h1>
 
           <p class="hero__lead reveal" style="--i: 2">
-            描述教学目标与知识点，AI 自动套用精美模版生成 PPT / Word /
-            互动课件。<br />
-            支持 PDF 参考文档上传、多种风格模版选择与多格式下载。
+            描述教学目标与知识点，AI 自动套用精美模版生成课件 PPT、教案
+            Word、课堂练习与试卷。<br />
+            模版按学科自动匹配，生成后可对话式反复修改，满意再导出。
           </p>
 
           <div

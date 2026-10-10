@@ -5,41 +5,41 @@ import SiteNav from "../components/layout/SiteNav.vue";
 const capabilities = [
   {
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 01-12.4 8.3L3 22l1.7-5.6A9 9 0 1121 12z"/></svg>',
-    title: "理解意图",
-    desc: "通过语音或文字多轮对话，主动询问并确认教学目标、核心知识点、讲授逻辑、重难点与互动设计。",
+    title: "理解教学意图",
+    desc: "通过文字多轮对话，主动询问并确认教学目标、核心知识点、讲授逻辑、重难点与课堂互动设计。",
   },
   {
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20L18 8a3 3 0 00-4.2-4.2L4 13.5"/><path d="M14 6l-8 8"/></svg>',
-    title: "融合多模态参考",
-    desc: "支持 PDF 教案、Word 文档、参考视频与图片，提取知识结构、案例与排版风格并融入生成。",
+    title: "融合教学要素",
+    desc: "把课标要求、教材章节、学情特点与讲授风格一并纳入生成约束，产出贴合真实课堂的材料。",
   },
   {
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.5 6.5L20 10l-6.5 1.5L12 18l-1.5-6.5L4 10l6.5-1.5z"/></svg>',
-    title: "生成课件初稿",
-    desc: "输出结构完整的 PPT 演示文稿、Word 教案，以及知识点动画创意、互动小游戏等多模态内容。",
+    title: "生成教学内容",
+    desc: "输出结构完整的课件 PPT、教案 Word，以及课堂练习与试卷，模版按学科自动匹配。",
   },
   {
     icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0115.4-3.4L23 10M1 14l4.1 4.4A9 9 0 0020.5 15"/></svg>',
     title: "支持迭代优化",
-    desc: "形成「互动 → 生成 → 反馈 → 再生成」闭环，支持预览修改与下载后自行编辑细节。",
+    desc: "形成「对话 → 生成 → 反馈 → 再生成」闭环，支持预览修改与下载后自行编辑细节。",
   },
 ];
 
 const values = [
   {
-    title: "多模态输入",
-    desc: "上传 PDF 教案、Word 文档、图片和视频，系统提取知识结构",
+    title: "对话式输入",
+    desc: "用自然语言描述课标、教材、学情与教学要求，AI 理解后按结构生成",
   },
   {
     title: "多格式输出",
-    desc: "一键导出 PPT 演示文稿、Word 教案和课堂小测互动文件",
+    desc: "一键导出课件 PPTX、教案 DOCX，以及课堂练习与试卷 HTML",
   },
-  { title: "可迭代", desc: "生成初稿后可反复修改完善，预览满意后再下载" },
+  { title: "可迭代", desc: "生成初稿后可反复提出修改意见，预览满意后再下载" },
 ];
 
 const team = [
   { name: "教学场景设计", role: "课堂调研 · 交互方案" },
-  { name: "AI 模型工程", role: "语言模型集成 · 多模态处理" },
+  { name: "AI 模型工程", role: "语言模型集成 · 提示词工程" },
   { name: "前端开发", role: "Vue3 · 课件编辑器" },
 ];
 </script>
@@ -53,8 +53,8 @@ const team = [
         <p class="eyebrow">About</p>
         <h1>关于知启灵枢</h1>
         <p class="hero__lead">
-          面向教师的课件制作工具，整合 AI 备课、课件管理、数据分析与教学社区。
-          支持多模态文档输入与多格式输出，覆盖备课到反思的全流程。
+          面向中小学教师的 AI 备课工具，整合教师问答、内容创作、教学档案与教研社区。
+          从教学目标到课件、教案、课堂练习与试卷，覆盖备课到反思的全流程。
         </p>
       </section>
 
