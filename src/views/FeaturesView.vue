@@ -329,9 +329,8 @@ const archiveFilterOptions = {
   grades: ["七年级", "八年级", "九年级", "高一", "高二", "高三"],
   formats: [
     { value: "pptx", label: "PPTX", icon: "ppt", color: "#f59e0b" },
-    { value: "pdf", label: "PDF", icon: "pdf", color: "#ef4444" },
     { value: "docx", label: "DOCX", icon: "doc", color: "#3b82f6" },
-    { value: "mp4", label: "MP4", icon: "video", color: "#8b5cf6" },
+    { value: "html", label: "HTML", icon: "interactive", color: "#8b5cf6" },
   ],
   difficulties: [
     { value: "basic", label: "基础", color: "#22c55e", bgColor: "#dcfce7" },

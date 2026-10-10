@@ -164,11 +164,6 @@ export function getTypeIcon(type) {
       <circle cx="15" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/>
       <path d="M17 12l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
     </svg>`,
-    animation: `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/>
-      <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-    </svg>`,
   }
   return icons[type] || icons.ppt
 }
