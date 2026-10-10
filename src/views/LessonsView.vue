@@ -1453,9 +1453,26 @@ const currentCourse = computed(() =>
     : null,
 );
 
-const currentVideos = computed(() =>
-  currentCourseId.value ? courseVideos[currentCourseId.value] || [] : [],
-);
+// 已落地的视频资源清单（对应 public/video/courses/）。未列出的 slug 视为
+// 「暂未上传」，列表渲染时过滤掉，避免出现点开即报错的空卡片。
+// 新增资源时：把 mp4 放到 public/video/courses/、封面放到
+// public/video/courses/covers/，再把 slug 补进这个集合即可。
+const AVAILABLE_COVERS = new Set([
+  "math-1", "math-2", "math-3",
+  "biology-1", "biology-2", "biology-3",
+  "history-1",
+  "geography-1", "geography-2", "geography-3",
+]);
+function hasVideo(video) {
+  return AVAILABLE_COVERS.has(video.cover);
+}
+
+const currentVideos = computed(() => {
+  const all = currentCourseId.value
+    ? courseVideos[currentCourseId.value] || []
+    : [];
+  return all.filter(hasVideo);
+});
 
 function openCourseDetail(id) {
   currentCourseId.value = id;
