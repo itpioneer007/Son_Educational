@@ -468,7 +468,10 @@ async def _run_generation(task_id: str, params: dict):
 async def _run_export(task_id: str, params: dict):
     """把用户确认后的 Markdown 内容渲染为最终文件（docx / html / pptx）。"""
     task = _tasks.get(task_id, {})
-    md = _ensure_content(task)
+    # 导出前再规整一次作为兜底：规整逻辑上线前落盘的老任务，正文里可能仍带着
+    # LaTeX（如 \(F_1=F\cos\theta\)）。生成端已规整过的正文再跑一遍是幂等的，
+    # 因此这里统一处理后，可保证「任何一次导出产出的文件都不含 LaTeX」。
+    md = normalize_md_indent(normalize_math(_ensure_content(task)))
     meta = {
         "subject": params.get("subject", ""),
         "grade": params.get("grade", ""),

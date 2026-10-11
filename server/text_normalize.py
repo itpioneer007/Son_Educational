@@ -76,6 +76,31 @@ def _apply_symbols(text: str) -> str:
     return text
 
 
+# 数学函数名：LaTeX 里是命令（`\cos`），纯文本里是一段普通字母，但前面的变量与它
+# 之间是隐含相乘 —— 直接删反斜杠会把 `F\cos\theta` 粘成难以阅读的 `Fcosθ`。
+# 这里显式识别函数名，前面是字母/数字/右括号时补一个空格还原相乘关系。
+_FUNCS = (
+    "arcsin arccos arctan sinh cosh tanh "
+    "sin cos tan cot sec csc "
+    "log ln lg lim max min exp det gcd sup inf deg"
+).split()
+_FUNC_RE = re.compile(r"\\(" + "|".join(_FUNCS) + r")(?![a-zA-Z])")
+_PRECEDING_ATOM = re.compile(r"[0-9A-Za-z)\]⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉]")
+# 修饰命令（矢量/上划线/帽子…）：只保留被修饰的内容，避免命令名残留进正文
+_ACCENT_RE = re.compile(
+    r"\\(?:vec|bar|hat|tilde|dot|ddot|overline|underline|widehat|widetilde)"
+    r"\s*\{([^{}]*)\}"
+)
+
+
+def _func_sub(m: "re.Match") -> str:
+    name = m.group(1)
+    prev = m.string[m.start() - 1] if m.start() > 0 else ""
+    if prev and _PRECEDING_ATOM.match(prev):
+        return " " + name
+    return name
+
+
 # 分数命令：分子/分母允许再套一层花括号，覆盖 \frac{\sqrt{2}}{2} 这类写法
 _NEST = r"(?:[^{}]|\{[^{}]*\})*"
 _FRAC_RE = re.compile(
@@ -133,14 +158,19 @@ def normalize_math(text: str) -> str:
         r"\1",
         s,
     )
+    # 度数 `30^\circ`：`^\circ` 不是上标，直接整体换成度符号，避免留下孤立的 `^`
+    s = re.sub(r"\^\s*\\circ(?![a-zA-Z])", "°", s)
+    # 矢量/上划线/帽子等修饰命令：只保留被修饰内容，别让命令名残留进正文
+    s = _ACCENT_RE.sub(r"\1", s)
 
     # ③ 上下标
     # 下标要求前面不是下划线/反斜杠：填空题的连续下划线（____）不能当作下标
     s = re.sub(r"\^\{([^{}]*)\}|\^(\w)", _sup, s)
     s = re.sub(r"_\{([^{}]*)\}|(?<![_\\])_([A-Za-z0-9])", _sub, s)
 
-    # ④ 符号命令
+    # ④ 符号命令 + 数学函数名（函数名前面的变量补空格还原隐含相乘）
     s = _apply_symbols(s)
+    s = _FUNC_RE.sub(_func_sub, s)
 
     # ⑤ 兜底：不留任何反斜杠（纯文本正文里它已无意义，且会被前端 marked 吃掉）
     s = s.replace("\\", "")
