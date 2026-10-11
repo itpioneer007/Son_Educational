@@ -52,12 +52,35 @@ def _headers(app_id: str, api_secret: str) -> dict:
     }
 
 
+class _EnvConfig:
+    """没有 spark_config.py 时的兜底配置：全部取自环境变量。
+
+    凭据文件不入库（.gitignore 忽略 server/spark_ppt/config/spark_config.py），
+    缺失时若直接抛 ImportError，上游只能看到「No module named 'spark_config'」，
+    看不出该怎么处理。改为返回这份空配置，让上层用「未配置讯飞凭据」这类
+    可读信息提示用户，同时保留用环境变量部署的途径。
+    """
+
+    APP_ID = os.environ.get("SPARK_APP_ID", "")
+    API_SECRET = os.environ.get("SPARK_API_SECRET", "")
+    TEMPLATE_ID = os.environ.get("SPARK_TEMPLATE_ID", "20240718489569D")
+    AUTHOR = os.environ.get("SPARK_AUTHOR", "知启灵枢")
+    AI_IMAGE = os.environ.get("SPARK_AI_IMAGE", "normal")
+    IS_CARD_NOTE = os.environ.get("SPARK_IS_CARD_NOTE", "true")
+    IS_FIGURE = os.environ.get("SPARK_IS_FIGURE", "true")
+    TIMEOUT_SECONDS = float(os.environ.get("SPARK_TIMEOUT_SECONDS", "300"))
+    POLL_INTERVAL = float(os.environ.get("SPARK_POLL_INTERVAL", "3"))
+
+
 def _load_config():
-    """读取 config/spark_config.py。"""
+    """读取 config/spark_config.py；缺失时回退到环境变量配置（见 _EnvConfig）。"""
     config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
     if config_dir not in sys.path:
         sys.path.insert(0, config_dir)
-    import spark_config
+    try:
+        import spark_config
+    except ImportError:
+        return _EnvConfig
     return spark_config
 
 

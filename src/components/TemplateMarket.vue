@@ -3,17 +3,23 @@ import { computed, ref, watch } from "vue";
 import AiBadge from "./AiBadge.vue";
 
 /**
- * PPT 模板选择：只对接讯飞智文模板。
- * 常驻「模板条」（当前模板 + 备注/配图开关 + 模板市场入口）+ 模板市场弹层。
- * 模板数据由父级持有，本组件只做展示与选择，通过事件回写。
- * 模板数量较多（约百个），市场内按风格归类 + 关键词检索，并渐进渲染（先渲染一批，
- * 点击「加载更多」再追加），避免一次性渲染上百张预览图造成卡顿。
+ * PPT 模板选择：常驻「模板条」（当前模板 + 备注/配图开关 + 模板市场入口）
+ * + 模板市场弹层。模板数据由父级持有，本组件只做展示与选择，通过事件回写。
+ *
+ * 模板有两个来源，互斥：
+ * - 讯飞智文在线模板：需配置凭据，数量多（约百个），按风格归类 + 关键词检索 +
+ *   渐进渲染（先渲染一批，点击「加载更多」再追加），避免上百张预览图一次渲染卡顿；
+ * - 本地内置模板：随仓库分发、不依赖任何在线凭据，始终可用，作为兜底分组展示，
+ *   保证「未配置讯飞凭据」时市场里依然选得到模板。
  */
 const props = defineProps({
   sparkTemplates: { type: Array, default: () => [] },
   sparkLoading: { type: Boolean, default: false },
   sparkError: { type: String, default: "" },
   selectedSparkId: { type: String, default: "" },
+  // 本地内置模板（兜底），结构与讯飞模板对齐：{ id, name, description, subjects }
+  localTemplates: { type: Array, default: () => [] },
+  selectedLocalId: { type: String, default: "" },
   cardNote: { type: Boolean, default: true },
   figure: { type: Boolean, default: true },
   // 图片地址归一化函数（复用父级的 previewUrl）
@@ -22,6 +28,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   "spark-change",
+  "local-change",
   "refresh-spark",
   "card-note-change",
   "figure-change",
@@ -31,6 +38,8 @@ const open = ref(false);
 const keyword = ref("");
 const activeStyle = ref("");
 const detail = ref(null);
+// 详情面板当前指向的是本地内置模板还是讯飞在线模板（决定回写到哪个字段）
+const detailIsLocal = ref(false);
 
 // 渐进渲染：每批渲染的模板数量
 const PAGE_SIZE = 24;
@@ -41,9 +50,17 @@ const currentTemplate = computed(
     props.sparkTemplates.find((t) => t.id === props.selectedSparkId) || null,
 );
 
-const currentLabel = computed(() =>
-  currentTemplate.value ? currentTemplate.value.name : "默认模板（推荐）",
+const currentLocal = computed(
+  () =>
+    props.localTemplates.find((t) => t.id === props.selectedLocalId) || null,
 );
+
+// 本地模板优先：选中本地时会清空讯飞选择，二者不会同时有值
+const currentLabel = computed(() => {
+  if (currentLocal.value) return currentLocal.value.name;
+  if (currentTemplate.value) return currentTemplate.value.name;
+  return "默认模板（推荐）";
+});
 
 // 按风格归类（模板自带 style，如 卡通 / 简约 / 商务 / 创意 / 国风 / 节日）
 const styles = computed(() => {
@@ -92,8 +109,20 @@ function imgOf(t) {
 }
 
 function openMarket() {
-  detail.value = currentTemplate.value || null;
+  if (currentLocal.value) {
+    detail.value = currentLocal.value;
+    detailIsLocal.value = true;
+  } else {
+    detail.value = currentTemplate.value || null;
+    detailIsLocal.value = false;
+  }
   open.value = true;
+}
+
+// 市场里点选模板卡片：记录它来自哪个分组，供「使用此模板」回写对应字段
+function selectDetail(t, isLocal) {
+  detail.value = t;
+  detailIsLocal.value = isLocal;
 }
 
 function closeMarket() {
@@ -101,12 +130,15 @@ function closeMarket() {
 }
 
 function applyTemplate(t) {
-  emit("spark-change", t.id);
+  // 按来源回写：本地模板走本地渲染引擎，在线模板走讯飞智文
+  if (detailIsLocal.value) emit("local-change", t.id);
+  else emit("spark-change", t.id);
   closeMarket();
 }
 
 function useDefault() {
   emit("spark-change", "");
+  emit("local-change", "");
   closeMarket();
 }
 
@@ -135,11 +167,18 @@ watch(open, (v) => {
       <div class="mk__strip-row mk__strip-row--current">
         <div class="mk__thumb">
           <img
-            v-if="currentTemplate && imgOf(currentTemplate)"
+            v-if="currentLocal && imgOf(currentLocal)"
+            :src="imgOf(currentLocal)"
+            alt=""
+          />
+          <img
+            v-else-if="currentTemplate && imgOf(currentTemplate)"
             :src="imgOf(currentTemplate)"
             alt=""
           />
-          <span v-else class="mk__thumb-fallback">讯</span>
+          <span v-else class="mk__thumb-fallback">{{
+            currentLocal ? "本" : "讯"
+          }}</span>
         </div>
         <div class="mk__current-meta">
           <span class="mk__current-name">{{ currentLabel }}</span>
@@ -181,7 +220,7 @@ watch(open, (v) => {
           aria-label="PPT 模板市场"
         >
           <header class="mk-modal__head">
-            <h4 class="mk-modal__title">讯飞智文模板市场</h4>
+            <h4 class="mk-modal__title">PPT 模板市场</h4>
             <input
               v-model="keyword"
               type="search"
@@ -246,8 +285,10 @@ watch(open, (v) => {
                   :key="t.id"
                   type="button"
                   class="mk-card"
-                  :class="{ 'is-active': detail && detail.id === t.id }"
-                  @click="detail = t"
+                  :class="{
+                    'is-active': !detailIsLocal && detail && detail.id === t.id,
+                  }"
+                  @click="selectDetail(t, false)"
                 >
                   <span class="mk-card__thumb">
                     <img
@@ -272,11 +313,52 @@ watch(open, (v) => {
                 </button>
               </div>
               <p
-                v-if="!filteredTemplates.length && !sparkLoading"
+                v-if="!filteredTemplates.length && !sparkLoading && !sparkError"
                 class="mk-content__empty"
               >
-                没有匹配的模板，试试其他关键词
+                没有匹配的在线模板，试试其他关键词
               </p>
+              <p
+                v-else-if="sparkError && localTemplates.length"
+                class="mk-content__empty"
+              >
+                在线模板暂不可用，可直接选用下方「本地内置模板」
+              </p>
+
+              <!-- 本地内置模板：随仓库分发、不依赖任何在线凭据，始终可选。
+                   与在线模板同处一个滚动区，避免出现双层滚动条 -->
+              <div v-if="localTemplates.length" class="mk-group">
+                <div class="mk-group-head">
+                  <span class="mk-group-title">本地内置模板</span>
+                  <span class="mk-group-hint">无需配置，开箱可用</span>
+                </div>
+                <div class="mk-grid">
+                  <button
+                    v-for="t in localTemplates"
+                    :key="'local-' + t.id"
+                    type="button"
+                    class="mk-card"
+                    :class="{
+                      'is-active': detailIsLocal && detail && detail.id === t.id,
+                    }"
+                    @click="selectDetail(t, true)"
+                  >
+                    <span class="mk-card__thumb">
+                      <img
+                        v-if="imgOf(t)"
+                        :src="imgOf(t)"
+                        alt=""
+                        loading="lazy"
+                      />
+                      <span v-else class="mk-card__thumb-fallback">{{
+                        t.name
+                      }}</span>
+                    </span>
+                    <span class="mk-card__name">{{ t.name }}</span>
+                    <span class="mk-card__badge">本地</span>
+                  </button>
+                </div>
+              </div>
             </section>
 
             <aside class="mk-detail">
@@ -293,7 +375,9 @@ watch(open, (v) => {
                 </div>
                 <h5 class="mk-detail__name">{{ detail.name }}</h5>
                 <p class="mk-detail__badges">
-                  <span class="mk-badge">讯飞模板</span>
+                  <span class="mk-badge">{{
+                    detailIsLocal ? "本地模板" : "讯飞模板"
+                  }}</span>
                   <span v-if="detail.industry" class="mk-badge mk-badge--muted">
                     {{ detail.industry }}
                   </span>
@@ -585,6 +669,31 @@ watch(open, (v) => {
   margin: 40px 0;
   font-size: 0.84rem;
   text-align: center;
+  color: var(--ink-muted);
+}
+
+/* ── 本地内置模板分组（与在线模板同处一个滚动区） ───────── */
+.mk-group {
+  margin-top: 22px;
+}
+
+.mk-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.mk-group-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.mk-group-hint {
+  font-size: 0.72rem;
   color: var(--ink-muted);
 }
 

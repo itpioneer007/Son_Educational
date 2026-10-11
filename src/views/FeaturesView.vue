@@ -14,6 +14,7 @@ import {
   subscribeProgress,
   downloadFile,
   getCoursewareTask,
+  getCoursewareTemplates,
   getCoursewareHistory as fetchApiHistory,
   deleteCoursewareTask as deleteApiTask,
 } from "../composables/useCoursewareApi.js";
@@ -266,6 +267,32 @@ async function fetchSparkTemplates() {
   } finally {
     sparkTemplateLoading.value = false;
   }
+}
+
+// ==================== 本地内置模板（模板市场兜底） ====================
+// 讯飞在线模板依赖 AppID/凭据，未配置时拉回来是空列表；本地模板随仓库分发、
+// 始终可用，因此一并加载，在市场里作为第二个分组展示，保证"总选得到模板"。
+const localTemplates = ref([]);
+
+async function fetchLocalTemplates() {
+  try {
+    const data = await getCoursewareTemplates();
+    localTemplates.value = data.templates || [];
+  } catch (e) {
+    console.warn("获取本地内置模板失败:", e);
+    localTemplates.value = [];
+  }
+}
+
+// 本地模板与讯飞模板互斥：选中一方即清空另一方，决定导出走本地还是在线引擎
+function onLocalTemplateChange(id) {
+  pptForm.value.template = id || "";
+  if (id) pptForm.value.sparkTemplateId = "";
+}
+
+function onSparkTemplateChange(id) {
+  pptForm.value.sparkTemplateId = id || "";
+  if (id) pptForm.value.template = "";
 }
 
 // 各面板最终产出内容的 AI 引擎（仅用于右侧对话区的 AI 头像，不在界面标注"生成引擎"）：
@@ -644,6 +671,7 @@ const pptForm = ref({
   assessmentCustom: "",
   referenceFile: null,
   sparkTemplateId: "", // 讯飞模板 ID，为空用后端默认模板
+  template: "", // 本地内置模板 ID；选中它即改用本地渲染引擎
   isCardNote: true, // 讯飞：是否生成演讲备注
   isFigure: true, // 讯飞：是否自动配图
 });
@@ -2829,6 +2857,9 @@ function handlePptGenerate() {
     usageScene: scene,
     assessment: assess,
     sparkTemplateId: pptForm.value.sparkTemplateId || "",
+    template: pptForm.value.template || "",
+    // 选了本地模板就直接走本地渲染，不必先等一次注定失败的讯飞调用再回退
+    engine: pptForm.value.template ? "local" : "spark",
     isCardNote: pptForm.value.isCardNote,
     isFigure: pptForm.value.isFigure,
   });
@@ -3324,6 +3355,8 @@ watch(totalHistoryPages, (value) => {
 onMounted(() => {
   // 加载讯飞智文模板（仅元数据，不消耗额度）
   fetchSparkTemplates();
+  // 本地内置模板：讯飞不可用（未配凭据等）时，市场仍有可选项
+  fetchLocalTemplates();
   // 处理路由参数：面板
   const queryPanel = route.query.panel;
   if (queryPanel) {
@@ -4354,10 +4387,13 @@ onUnmounted(() => {
                   :spark-loading="sparkTemplateLoading"
                   :spark-error="sparkTemplateError"
                   :selected-spark-id="pptForm.sparkTemplateId"
+                  :local-templates="localTemplates"
+                  :selected-local-id="pptForm.template"
                   :card-note="pptForm.isCardNote"
                   :figure="pptForm.isFigure"
                   :resolve-preview="previewUrl"
-                  @spark-change="(v) => (pptForm.sparkTemplateId = v)"
+                  @spark-change="onSparkTemplateChange"
+                  @local-change="onLocalTemplateChange"
                   @refresh-spark="fetchSparkTemplates"
                   @card-note-change="(v) => (pptForm.isCardNote = v)"
                   @figure-change="(v) => (pptForm.isFigure = v)"

@@ -3,7 +3,20 @@
  * 后端地址统一由 src/config/api.js 提供（可用 VITE_API_ORIGIN 覆盖）
  */
 
-import { API_BASE } from "../config/api.js";
+import { API_BASE, API_ORIGIN } from "../config/api.js";
+
+/**
+ * 获取本地内置 PPT 模板列表（含 GordenPPTSkill 精品模板）。
+ *
+ * 这些模板随仓库分发、不依赖任何在线凭据，因此可作为模板市场的兜底：
+ * 讯飞在线模板不可用（未配置凭据 / 网络异常）时，市场里仍有模板可选。
+ * @returns {Promise<{templates: Array, defaultTemplate: string}>}
+ */
+export async function getCoursewareTemplates() {
+  const res = await fetch(`${API_ORIGIN}/api/templates`);
+  if (!res.ok) throw new Error(`获取模板失败: ${res.status}`);
+  return res.json();
+}
 
 /**
  * 提交课件生成任务
