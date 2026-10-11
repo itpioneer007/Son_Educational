@@ -3804,7 +3804,7 @@ watch(activeMenu, (newVal) => {
                   <span>✨</span>
                   生成新的学习总结
                 </button>
-                <button class="ai-btn">
+                <button class="ai-btn" @click="router.push('/analysis')">
                   <span>📊</span>
                   查看完整学习报告
                 </button>

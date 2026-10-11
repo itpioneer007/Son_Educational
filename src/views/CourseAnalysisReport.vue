@@ -1,6 +1,10 @@
 <script setup>
 import { ref, onMounted, computed, nextTick } from "vue";
+import { useRouter } from "vue-router";
 import * as echarts from "echarts";
+import { dateKey } from "../utils/demoData.js";
+
+const router = useRouter();
 
 // ==================== 课程数据（含能力模块分析） ====================
 const courses = [
@@ -295,7 +299,8 @@ function initCharts() {
   courses.forEach((course, index) => {
     const chartDom = document.getElementById(`chart-${course.id}`);
     if (chartDom) {
-      const chart = echarts.init(chartDom);
+      // 用 svg 渲染器：导出报告时整份图表能随 HTML 一起带走（canvas 不行）
+      const chart = echarts.init(chartDom, null, { renderer: "svg" });
       const option = generatePieOption(course, index);
       chart.setOption(option);
       chartInstances.value.push(chart);
@@ -311,8 +316,34 @@ function handleResize() {
 }
 
 // ==================== 导出报告 ====================
+// 演示环境没有后端导出服务：把当前已渲染好的报告（含 ECharts 输出的 SVG）
+// 打包成一份可离线打开、可继续打印为 PDF 的 HTML 文件下载。
+// 图表必须用 svg 渲染器，否则画在 canvas 上、导出后是一片空白。
 function exportReport() {
-  alert("报告导出功能开发中...\n可生成PDF格式的完整分析报告");
+  const node = reportRef.value;
+  if (!node) return;
+  const styles = Array.from(document.querySelectorAll("style"))
+    .map((s) => s.textContent || "")
+    .join("\n");
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>课程内容可视化分析报告</title>
+<style>body{margin:0;padding:24px;background:#f7f9fc;font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif;}
+${styles}</style>
+</head>
+<body>${node.outerHTML}</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `课程内容可视化分析报告-${dateKey()}.html`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ==================== 打印报告 ====================
@@ -375,6 +406,10 @@ const subjectDistribution = computed(() => {
         </div>
       </div>
       <div class="header-actions">
+        <button class="action-btn secondary" @click="router.back()">
+          <span>←</span>
+          <span>返回</span>
+        </button>
         <button class="action-btn secondary" @click="printReport">
           <span>🖨️</span>
           <span>打印</span>
