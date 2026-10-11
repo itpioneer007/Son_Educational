@@ -983,6 +983,9 @@ _HTML_MD_CSS = """
   .doc p { margin: 7px 0; color: var(--ink-body); }
   .doc ul, .doc ol { margin: 7px 0 7px 24px; color: var(--ink-body); }
   .doc li { margin: 5px 0; }
+  /* 题目下的选项子列表：与题干同属一个 <li>，选项不再脱离题干独立成列表 */
+  .doc ol > li > ul.opts { margin: 4px 0 2px 20px; list-style: none; }
+  .doc ol > li > ul.opts > li { margin: 2px 0; color: #3A4048; }
   /* 重点只靠字重，不引色相 —— 与 AI 回答、教案保持同一规则 */
   strong { color: var(--ink); font-weight: 700; }
   .footer { text-align: center; margin-top: 36px; padding-top: 18px;
@@ -1003,19 +1006,127 @@ def _html_inline(text: str) -> str:
     return text
 
 
+_OL_RE = re.compile(r'^(\d+)[.、)]\s+(.*)$')
+_UL_RE = re.compile(r'^[-*+]\s+(.*)$')
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _parse_blocks_html(md: str) -> list:
+    """HTML 专用块解析：支持列表嵌套与「跨空行仍属同一列表」。
+
+    `_parse_markdown_blocks` 面向 DOCX 的逐行排版，用于试卷/练习会出两类问题：
+      ① 题干（1. …）与缩进选项（- A. …）是不同符号，被拆成两个同级块 →
+         选项脱离了题干独立成 <ul>；
+      ② 题目之间有空行，每个「1. 题干」各自成为独立的 <ol> →
+         卷面上每道题都显示为「1.」，题号全乱。
+
+    这里针对 HTML 输出单独解析：同级同类的列表项即使被空行分隔也并入同一
+    列表；更深缩进的 `-` 行收作上一项的子列表（题干 → 选项）。
+    返回块：("h1".."h6"|"hr"|"p", str) 或 ("ol"|"ul", [{"text", "sub": [...]}])
+    """
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    n = len(lines)
+    blocks = []
+
+    def _skip_blanks(start: int) -> int:
+        while start < n and not lines[start].strip():
+            start += 1
+        return start
+
+    def _sub_at(start: int, base: int) -> int:
+        """从 start 起（允许跨空行）若为比 base 更深缩进的 `-` 行，返回其行号。"""
+        j = _skip_blanks(start)
+        if j < n and _indent_of(lines[j]) > base and _UL_RE.match(lines[j].strip()):
+            return j
+        return -1
+
+    i = 0
+    while i < n:
+        raw = lines[i]
+        line = raw.strip()
+        if not line:
+            i += 1
+            continue
+
+        heading = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if heading:
+            blocks.append((f"h{len(heading.group(1))}", heading.group(2).strip()))
+            i += 1
+            continue
+        if re.match(r'^([-*_])\1{2,}$', line):
+            blocks.append(("hr", ""))
+            i += 1
+            continue
+
+        m_ol, m_ul = _OL_RE.match(line), _UL_RE.match(line)
+        if m_ol or m_ul:
+            kind = "ol" if m_ol else "ul"
+            base = _indent_of(raw)
+            items = []
+            while i < n:
+                cur = lines[i]
+                if not cur.strip():
+                    # 空行不打断列表：仅当后续仍是同级同类项时继续
+                    j = _skip_blanks(i)
+                    if j >= n or _indent_of(lines[j]) != base:
+                        break
+                    nxt = lines[j].strip()
+                    if not (_OL_RE.match(nxt) if kind == "ol" else _UL_RE.match(nxt)):
+                        break
+                    i = j
+                    continue
+                if _indent_of(cur) != base:
+                    break
+                m = _OL_RE.match(cur.strip()) if kind == "ol" else _UL_RE.match(cur.strip())
+                if not m:
+                    break
+                item = {
+                    "text": (m.group(2) if kind == "ol" else m.group(1)).strip(),
+                    "sub": [],
+                }
+                items.append(item)
+                i += 1
+                # 收拢该项下的缩进子列表（题目 → 选项 / 答案）
+                while True:
+                    k = _sub_at(i, base)
+                    if k < 0:
+                        break
+                    item["sub"].append(_UL_RE.match(lines[k].strip()).group(1).strip())
+                    i = k + 1
+            blocks.append((kind, items))
+            continue
+
+        blocks.append(("p", line))
+        i += 1
+    return blocks
+
+
+def _html_list(kind: str, items: list) -> str:
+    """渲染列表；带子列表的项把子项嵌在自身 <li> 内，避免题干与选项分离。"""
+    out = [f"<{kind}>"]
+    for it in items:
+        text = _html_inline(it["text"])
+        if it["sub"]:
+            subs = "".join(f"<li>{_html_inline(s)}</li>" for s in it["sub"])
+            out.append(f'<li>{text}<ul class="opts">{subs}</ul></li>')
+        else:
+            out.append(f"<li>{text}</li>")
+    out.append(f"</{kind}>")
+    return "".join(out)
+
+
 def _markdown_to_html(md: str) -> str:
     """Markdown 块 → HTML（标题 / 列表 / 段落）。"""
     parts = []
-    for kind, payload in _parse_markdown_blocks(md):
+    for kind, payload in _parse_blocks_html(md):
         if kind.startswith("h"):
             lvl = kind[1]
             parts.append(f"<h{lvl}>{_html_inline(payload)}</h{lvl}>")
-        elif kind == "ul":
-            items = "".join(f"<li>{_html_inline(x)}</li>" for x in payload)
-            parts.append(f"<ul>{items}</ul>")
-        elif kind == "ol":
-            items = "".join(f"<li>{_html_inline(x)}</li>" for x in payload)
-            parts.append(f"<ol>{items}</ol>")
+        elif kind in ("ul", "ol"):
+            parts.append(_html_list(kind, payload))
         else:
             parts.append(f"<p>{_html_inline(payload)}</p>")
     return "\n".join(parts)
