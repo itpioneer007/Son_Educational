@@ -23,10 +23,10 @@ const showcaseItems = [
   },
   {
     id: 2,
-    title: "课件管理",
-    subtitle: "精美模版一键套用，生成即用",
+    title: "课堂教程",
+    subtitle: "名师课堂视频，按学科分类回看",
     description:
-      "统一管理已生成的课件、教案、练习题与试卷，支持 <em>PPTX / DOCX / HTML</em> 一键导出。<em>5 套本地精美模版</em>，按学科自动匹配，只改内容不改设计。",
+      "汇集多学科课堂教程视频与课程能力画像，<em>按学科分类</em>浏览，支持边看边标记，覆盖课前备课到课后追踪全流程。",
     icon: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>`,
     gradient: "linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)",
     accent: "#10b981",
