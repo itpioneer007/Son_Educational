@@ -12,6 +12,7 @@ import { RouterLink } from "vue-router";
 import { useCommunity, formatTime } from "../composables/useCommunity.js";
 import * as echarts from "echarts";
 import SiteNav from "../components/layout/SiteNav.vue";
+import { seededInt } from "../utils/demoData.js";
 
 // 用户信息
 import { useUserStore } from "../stores/userStore.js";
@@ -1157,12 +1158,16 @@ const prefixes = [
 ];
 
 // 初始化年度文件数据
+// 文件名用「月份 + 序号」作种子确定生成：同一份历史记录的名字恒定不变，
+// 避免每次刷新整列文件名都换一遍（旧写法用 Math.random()，一眼就露馅）。
 usageData.value.year.files = {};
 months.forEach((month, index) => {
   const count = usageData.value.year.data[index];
   usageData.value.year.files[month] = Array.from({ length: count }, (_, j) => {
-    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const type = fileTypes[Math.floor(Math.random() * fileTypes.length)];
+    const prefix =
+      prefixes[seededInt(`${month}-f${j}-prefix`, 0, prefixes.length - 1)];
+    const type =
+      fileTypes[seededInt(`${month}-f${j}-type`, 0, fileTypes.length - 1)];
     const weekNum = Math.floor(j / 7) + 1;
     return `${month}${weekNum}周-${prefix}${j + 1}${type}`;
   });
