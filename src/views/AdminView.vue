@@ -8,6 +8,158 @@ import {
   deleteCoursewareTask,
   downloadFile,
 } from "../composables/useCoursewareApi.js";
+import { seededInt, dateKey } from "../utils/demoData.js";
+
+// ── 演示数据源（所有统计口径的唯一出处）────────────────────
+// AdminView 属「有界面无后端」的演示模块：看板上的备课量、课时、班级学情
+// 本应来自服务端。这里集中生成一份数据，种子 = 自然日 + 指标名：
+//   ① 同一天刷新结果恒定，不会乱跳，看不出是现算的；
+//   ② 跨天缓慢变化，像真有人在每天使用。
+// 图表数值与下方「洞察」文案都从这份数据取值 / 推导，因此不会再出现
+// 「文案写 15 个、图上却画 8 个」这种自相矛盾。
+const demo = (() => {
+  const key = dateKey();
+  const n = (name, min, max) => seededInt(`zqls-admin:${key}:${name}`, min, max);
+  const list = (name, len, min, max) =>
+    Array.from({ length: len }, (_, i) => n(`${name}-${i}`, min, max));
+  /** 从 base 起步、每项累加 0..step 的递增序列（模拟"逐步变好"的趋势） */
+  const rising = (name, len, base, step) => {
+    let v = base;
+    return Array.from({ length: len }, (_, i) => {
+      v += n(`${name}-${i}`, 0, step);
+      return v;
+    });
+  };
+
+  const clsNames = ["高一(3)班", "高二(1)班", "高三(2)班"];
+
+  // 工作台：本周每日生成量 / 课件类型占比 / 学科产出
+  const weekly = list("weekly", 7, 4, 16);
+  const kind = [
+    n("kind-0", 38, 52),
+    n("kind-1", 18, 28),
+    n("kind-2", 12, 20),
+    n("kind-3", 8, 16),
+  ];
+  const subject = list("subject", 6, 18, 50);
+
+  // 课程表：一周 5 天 × 7 节的课时密度 / 年级周课时 / 学期进度 / 每日类型 / 利用率
+  const heat = [];
+  for (let d = 0; d < 5; d += 1) {
+    for (let p = 0; p < 7; p += 1) heat.push([d, p, n(`heat-${d}-${p}`, 0, 4)]);
+  }
+  const gradeHours = [n("gh-0", 11, 14), n("gh-1", 8, 12), n("gh-2", 6, 10)];
+  const progress = n("progress", 58, 74);
+  const dayTypes = [
+    list("dt-0", 5, 2, 4),
+    list("dt-1", 5, 0, 2),
+    list("dt-2", 5, 0, 2),
+    list("dt-3", 5, 0, 2),
+  ];
+  const util = list("util", 5, 66, 92);
+
+  // 班级：三班五维能力 / 分数段分布 / 历次考试均分走势
+  const radar3 = clsNames.map((_, c) => list(`radar-${c}`, 5, 58, 92));
+  const scoreDist3 = clsNames.map((_, c) => list(`dist-${c}`, 5, 2, 15));
+  const examTrend3 = clsNames.map((_, c) =>
+    rising(`exam-${c}`, 6, n(`exam-${c}-base`, 66, 78), 3),
+  );
+
+  // 成绩：分数段 / 班级均分走势 / 学科能力 / 参与度散点 / 学生名单
+  const gradeDist = [
+    n("gd-0", 4, 8),
+    n("gd-1", 10, 15),
+    n("gd-2", 18, 26),
+    n("gd-3", 24, 32),
+    n("gd-4", 14, 20),
+  ];
+  const classAvg = rising("cavg", 6, n("cavg-base", 68, 76), 3);
+  const subjectRadar = [list("sr-0", 5, 58, 88), list("sr-1", 5, 58, 88)];
+  const scatter = Array.from({ length: 40 }, (_, i) => [
+    n(`sc-${i}-a`, 38, 98),
+    n(`sc-${i}-b`, 40, 98),
+    n(`sc-${i}-c`, 8, 38),
+  ]);
+  const names = [
+    "张明远",
+    "吴婉婷",
+    "陈静茹",
+    "李华清",
+    "王芳菲",
+    "刘浩然",
+    "赵鹏程",
+    "周子轩",
+  ];
+  const students = names
+    .map((name, i) => {
+      const score = i === 0 ? n("stu-hi", 90, 96) : n(`stu-${i}`, 56, 90);
+      const t = n(`stu-trend-${i}`, 0, 2);
+      return {
+        name,
+        score,
+        trend: t === 0 ? "down" : t === 1 ? "stable" : "up",
+        status:
+          score >= 90
+            ? "优秀"
+            : score >= 80
+              ? "良好"
+              : score >= 70
+                ? "中等"
+                : "待提高",
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  // 模板：使用排行 / 类型占比 / 近六月趋势
+  const templUse = list("tu", 5, 4, 20).sort((a, b) => b - a);
+  const templMix = [n("tm-0", 50, 64), n("tm-1", 20, 30), n("tm-2", 10, 20)];
+  const templTrend = [
+    list("tt-0", 6, 4, 18),
+    list("tt-1", 6, 3, 12),
+    list("tt-2", 6, 2, 10),
+  ];
+
+  // 设置：存储占用 / 每月操作次数
+  const storage = [
+    n("st-0", 42, 54),
+    n("st-1", 18, 26),
+    n("st-2", 14, 22),
+    n("st-3", 8, 16),
+  ];
+  const monthlyOps = list("ops", 6, 260, 540);
+
+  return {
+    clsNames,
+    weekly,
+    kind,
+    subject,
+    heat,
+    gradeHours,
+    progress,
+    dayTypes,
+    util,
+    radar3,
+    scoreDist3,
+    examTrend3,
+    gradeDist,
+    classAvg,
+    subjectRadar,
+    scatter,
+    students,
+    templUse,
+    templMix,
+    templTrend,
+    storage,
+    monthlyOps,
+  };
+})();
+
+// 兜底与统计小工具（供图表与「洞察」文案共用，保证二者永远一致）
+const WEEK_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
+const SUBJECT_LABELS = ["语文", "数学", "英语", "物理", "化学", "生物"];
+const sumOf = (arr) => arr.reduce((a, b) => a + b, 0);
+const argMax = (arr) => arr.reduce((mi, v, i) => (v > arr[mi] ? i : mi), 0);
+const argMin = (arr) => arr.reduce((mi, v, i) => (v < arr[mi] ? i : mi), 0);
 
 const router = useRouter();
 const user = useUserStore();
@@ -169,7 +321,7 @@ function initCharts() {
       {
         type: "line",
         smooth: true,
-        data: [5, 8, 12, 10, 15, 6, 3],
+        data: demo.weekly,
         symbol: "circle",
         symbolSize: 7,
         lineStyle: { color: C.work[0], width: 2.5 },
@@ -197,10 +349,10 @@ function initCharts() {
           formatter: "{b}\n{d}%",
         },
         data: [
-          { value: 48, name: "PPT课件", itemStyle: { color: C.work[0] } },
-          { value: 26, name: "教案文档", itemStyle: { color: C.work[1] } },
-          { value: 18, name: "考试试卷", itemStyle: { color: C.work[2] } },
-          { value: 14, name: "课堂练习", itemStyle: { color: C.work[3] } },
+          { value: demo.kind[0], name: "PPT课件", itemStyle: { color: C.work[0] } },
+          { value: demo.kind[1], name: "教案文档", itemStyle: { color: C.work[1] } },
+          { value: demo.kind[2], name: "考试试卷", itemStyle: { color: C.work[2] } },
+          { value: demo.kind[3], name: "课堂练习", itemStyle: { color: C.work[3] } },
         ],
       },
     ],
@@ -225,7 +377,7 @@ function initCharts() {
     series: [
       {
         type: "bar",
-        data: [35, 48, 28, 42, 30, 22],
+        data: demo.subject,
         barWidth: 28,
         label: {
           show: true,
@@ -242,43 +394,7 @@ function initCharts() {
   // 课程表
   const days = ["周一", "周二", "周三", "周四", "周五"],
     slots = ["第1节", "第2节", "第3节", "第4节", "第5节", "第6节", "第7节"];
-  const hd = [
-    [0, 0, 2],
-    [0, 1, 4],
-    [0, 2, 0],
-    [0, 3, 0],
-    [0, 4, 2],
-    [0, 5, 0],
-    [0, 6, 0],
-    [1, 0, 0],
-    [1, 1, 0],
-    [1, 2, 3],
-    [1, 3, 0],
-    [1, 4, 0],
-    [1, 5, 1],
-    [1, 6, 0],
-    [2, 0, 2],
-    [2, 1, 0],
-    [2, 2, 0],
-    [2, 3, 4],
-    [2, 4, 0],
-    [2, 5, 0],
-    [2, 6, 1],
-    [3, 0, 0],
-    [3, 1, 0],
-    [3, 2, 0],
-    [3, 3, 0],
-    [3, 4, 3],
-    [3, 5, 0],
-    [3, 6, 0],
-    [4, 0, 0],
-    [4, 1, 2],
-    [4, 2, 0],
-    [4, 3, 0],
-    [4, 4, 0],
-    [4, 5, 0],
-    [4, 6, 1],
-  ];
+  const hd = demo.heat;
   ec("ch-s1")?.setOption({
     grid: { top: 24, bottom: 70, left: 60, right: 16 },
     xAxis: {
@@ -352,11 +468,10 @@ function initCharts() {
     series: [
       {
         type: "bar",
-        data: [
-          { value: 12, itemStyle: { color: C.sched[0] } },
-          { value: 10, itemStyle: { color: C.sched[1] } },
-          { value: 8, itemStyle: { color: C.sched[2] } },
-        ],
+        data: demo.gradeHours.map((v, i) => ({
+          value: v,
+          itemStyle: { color: C.sched[i] },
+        })),
         barWidth: 30,
         borderRadius: [4, 4, 0, 0],
         label: { show: true, position: "top", fontSize: 11, color: "#6B7C93" },
@@ -389,12 +504,12 @@ function initCharts() {
           fontWeight: 700,
           color: "#111",
           offsetCenter: [0, "36%"],
-          formatter: "65%",
+          formatter: `${demo.progress}%`,
         },
-        data: [{ value: 65 }],
+        data: [{ value: demo.progress }],
       },
     ],
-    tooltip: { ...tip, formatter: "学期进度: 65%" },
+    tooltip: { ...tip, formatter: `学期进度: ${demo.progress}%` },
   });
   ec("ch-s4")?.setOption({
     tooltip: { ...tip, trigger: "axis" },
@@ -428,28 +543,28 @@ function initCharts() {
         type: "bar",
         stack: "total",
         barWidth: 26,
-        data: [4, 3, 3, 2, 2],
+        data: demo.dayTypes[0],
         itemStyle: { color: C.sched[0], borderRadius: [0, 0, 0, 0] },
       },
       {
         name: "复习课",
         type: "bar",
         stack: "total",
-        data: [1, 2, 0, 2, 1],
+        data: demo.dayTypes[1],
         itemStyle: { color: C.sched[1] },
       },
       {
         name: "实验课",
         type: "bar",
         stack: "total",
-        data: [1, 0, 2, 0, 1],
+        data: demo.dayTypes[2],
         itemStyle: { color: C.sched[2] },
       },
       {
         name: "其他",
         type: "bar",
         stack: "total",
-        data: [0, 1, 1, 0, 2],
+        data: demo.dayTypes[3],
         itemStyle: { color: C.sched[3] },
         label: {
           show: true,
@@ -458,7 +573,10 @@ function initCharts() {
           fontWeight: 600,
           color: "#6B7C93",
           formatter: (p) => {
-            const totals = [6, 6, 6, 4, 6];
+            // 每日总课时由四类相加得出，不再写死 [6,6,6,4,6]
+            const totals = [0, 1, 2, 3, 4].map((d) =>
+              demo.dayTypes.reduce((s, t) => s + t[d], 0),
+            );
             return totals[p.dataIndex] + "节";
           },
         },
@@ -487,26 +605,18 @@ function initCharts() {
     series: [
       {
         type: "radar",
-        data: [
-          {
-            value: [88, 72, 65, 58, 70],
-            name: "高一(3)班",
-            lineStyle: { color: C.cls[0] },
-            areaStyle: { color: "rgba(31,108,159,0.1)" },
+        data: demo.clsNames.map((name, i) => ({
+          value: demo.radar3[i],
+          name,
+          lineStyle: { color: C.cls[i] },
+          areaStyle: {
+            color: [
+              "rgba(31,108,159,0.1)",
+              "rgba(0,194,212,0.1)",
+              "rgba(16,185,129,0.1)",
+            ][i],
           },
-          {
-            value: [70, 65, 80, 60, 75],
-            name: "高二(1)班",
-            lineStyle: { color: C.cls[1] },
-            areaStyle: { color: "rgba(0,194,212,0.1)" },
-          },
-          {
-            value: [85, 80, 78, 75, 82],
-            name: "高三(2)班",
-            lineStyle: { color: C.cls[2] },
-            areaStyle: { color: "rgba(16,185,129,0.1)" },
-          },
-        ],
+        })),
       },
     ],
   });
@@ -540,67 +650,26 @@ function initCharts() {
         type: "bar",
         barWidth: 12,
         barGap: "30%",
-        data: [3, 5, 10, 14, 8],
+        data: demo.scoreDist3[0],
         itemStyle: { color: C.cls[0], borderRadius: [4, 4, 0, 0] },
       },
       {
         name: "高二(1)",
         type: "bar",
         barWidth: 12,
-        data: [5, 8, 12, 8, 5],
+        data: demo.scoreDist3[1],
         itemStyle: { color: C.cls[1], borderRadius: [4, 4, 0, 0] },
       },
       {
         name: "高三(2)",
         type: "bar",
         barWidth: 12,
-        data: [2, 4, 8, 12, 14],
+        data: demo.scoreDist3[2],
         itemStyle: { color: C.cls[2], borderRadius: [4, 4, 0, 0] },
       },
     ],
   });
-  const sct = [
-    [92, 88, 35],
-    [85, 72, 28],
-    [78, 65, 22],
-    [65, 50, 15],
-    [88, 90, 32],
-    [72, 68, 20],
-    [58, 42, 10],
-    [95, 92, 38],
-    [82, 78, 25],
-    [76, 70, 18],
-    [68, 55, 14],
-    [90, 85, 30],
-    [60, 48, 12],
-    [84, 80, 26],
-    [70, 62, 16],
-    [55, 38, 8],
-    [80, 75, 22],
-    [74, 66, 18],
-    [62, 52, 12],
-    [86, 82, 28],
-    [78, 74, 20],
-    [92, 88, 34],
-    [70, 58, 16],
-    [66, 60, 14],
-    [88, 84, 30],
-    [82, 76, 24],
-    [58, 40, 8],
-    [94, 90, 36],
-    [76, 72, 20],
-    [68, 56, 14],
-    [84, 78, 22],
-    [72, 64, 18],
-    [90, 86, 32],
-    [62, 54, 12],
-    [80, 74, 22],
-    [56, 44, 10],
-    [86, 80, 26],
-    [74, 68, 18],
-    [70, 62, 16],
-    [92, 86, 30],
-  ];
+  const sct = demo.scatter;
   ec("ch-c3")?.setOption({
     grid: { top: 28, bottom: 32, left: 56, right: 24 },
     xAxis: {
@@ -665,7 +734,7 @@ function initCharts() {
         name: "高一(3)",
         type: "line",
         smooth: true,
-        data: [72, 78, 74, 80, 85, 82],
+        data: demo.examTrend3[0],
         lineStyle: { color: C.cls[0], width: 2 },
         symbol: "circle",
         symbolSize: 6,
@@ -675,7 +744,7 @@ function initCharts() {
         name: "高二(1)",
         type: "line",
         smooth: true,
-        data: [68, 72, 70, 75, 78, 80],
+        data: demo.examTrend3[1],
         lineStyle: { color: C.cls[1], width: 2 },
         symbol: "diamond",
         symbolSize: 6,
@@ -685,7 +754,7 @@ function initCharts() {
         name: "高三(2)",
         type: "line",
         smooth: true,
-        data: [85, 82, 86, 84, 88, 90],
+        data: demo.examTrend3[2],
         lineStyle: { color: C.cls[2], width: 2 },
         symbol: "triangle",
         symbolSize: 6,
@@ -715,7 +784,7 @@ function initCharts() {
     series: [
       {
         type: "bar",
-        data: [6, 12, 22, 28, 18],
+        data: demo.gradeDist,
         barWidth: 28,
         itemStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -728,6 +797,7 @@ function initCharts() {
       },
     ],
   });
+  const gradeLine = Math.round(sumOf(demo.classAvg) / demo.classAvg.length);
   ec("ch-g2")?.setOption({
     grid: { top: 28, bottom: 32, left: 52, right: 24 },
     xAxis: {
@@ -751,7 +821,7 @@ function initCharts() {
       {
         type: "line",
         smooth: true,
-        data: [72, 75, 80, 78, 83, 86],
+        data: demo.classAvg,
         lineStyle: { color: C.grade[0], width: 2.5 },
         areaStyle: { color: "rgba(5,150,105,0.08)" },
         symbol: "diamond",
@@ -761,9 +831,9 @@ function initCharts() {
           silent: true,
           data: [
             {
-              yAxis: 80,
+              yAxis: gradeLine,
               label: {
-                formatter: "年级平均 80",
+                formatter: `年级平均 ${gradeLine}`,
                 color: "#94A3B8",
                 fontSize: 10,
               },
@@ -795,13 +865,13 @@ function initCharts() {
         type: "radar",
         data: [
           {
-            value: [85, 72, 68, 78, 82],
+            value: demo.subjectRadar[0],
             name: "物理",
             lineStyle: { color: C.grade[0] },
             areaStyle: { color: "rgba(5,150,105,0.08)" },
           },
           {
-            value: [78, 82, 60, 75, 70],
+            value: demo.subjectRadar[1],
             name: "数学",
             lineStyle: { color: C.grade[1] },
             areaStyle: { color: "rgba(8,145,178,0.08)" },
@@ -810,6 +880,9 @@ function initCharts() {
       },
     ],
   });
+  const stuAvg = Math.round(
+    sumOf(demo.students.map((s) => s.score)) / demo.students.length,
+  );
   ec("ch-g4")?.setOption({
     tooltip: { ...tip, trigger: "axis" },
     grid: { top: 20, bottom: 30, left: 68, right: 40 },
@@ -822,15 +895,7 @@ function initCharts() {
     },
     yAxis: {
       type: "category",
-      data: [
-        "张明远",
-        "陈静茹",
-        "李华清",
-        "王芳菲",
-        "刘浩然",
-        "赵鹏程",
-        "周子轩",
-      ],
+      data: demo.students.map((s) => s.name),
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { color: "#6B7C93", fontSize: 11 },
@@ -839,7 +904,7 @@ function initCharts() {
       {
         name: "当前成绩",
         type: "bar",
-        data: [92, 88, 85, 78, 72, 65, 58],
+        data: demo.students.map((s) => s.score),
         barWidth: 18,
         label: {
           show: true,
@@ -855,11 +920,11 @@ function initCharts() {
           label: {
             show: true,
             position: "end",
-            formatter: "班级均分 76",
+            formatter: `班级均分 ${stuAvg}`,
             fontSize: 10,
             color: "#64748B",
           },
-          data: [{ xAxis: 76 }],
+          data: [{ xAxis: stuAvg }],
         },
       },
     ],
@@ -891,7 +956,7 @@ function initCharts() {
     series: [
       {
         type: "bar",
-        data: [18, 15, 12, 9, 6],
+        data: demo.templUse,
         barWidth: 16,
         label: {
           show: true,
@@ -917,9 +982,9 @@ function initCharts() {
           formatter: "{b}\n{d}%",
         },
         data: [
-          { value: 60, name: "PPT模板", itemStyle: { color: C.templ[0] } },
-          { value: 25, name: "教案模板", itemStyle: { color: C.templ[1] } },
-          { value: 15, name: "试卷模板", itemStyle: { color: C.templ[2] } },
+          { value: demo.templMix[0], name: "PPT模板", itemStyle: { color: C.templ[0] } },
+          { value: demo.templMix[1], name: "教案模板", itemStyle: { color: C.templ[1] } },
+          { value: demo.templMix[2], name: "试卷模板", itemStyle: { color: C.templ[2] } },
         ],
       },
     ],
@@ -952,7 +1017,7 @@ function initCharts() {
       {
         type: "line",
         smooth: true,
-        data: [8, 12, 15, 18, 14, 10],
+        data: demo.templTrend[0],
         name: "物理新授课",
         lineStyle: { color: C.templ[0], width: 2 },
         symbol: "none",
@@ -961,7 +1026,7 @@ function initCharts() {
       {
         type: "line",
         smooth: true,
-        data: [5, 8, 10, 12, 9, 7],
+        data: demo.templTrend[1],
         name: "数学复习课",
         lineStyle: { color: C.templ[1], width: 2 },
         symbol: "none",
@@ -970,7 +1035,7 @@ function initCharts() {
       {
         type: "line",
         smooth: true,
-        data: [3, 6, 8, 10, 7, 4],
+        data: demo.templTrend[2],
         name: "化学实验课",
         lineStyle: { color: C.templ[2], width: 2 },
         symbol: "none",
@@ -994,10 +1059,10 @@ function initCharts() {
           formatter: "{b}\n{d}%",
         },
         data: [
-          { value: 48, name: "课件文件", itemStyle: { color: "#64748B" } },
-          { value: 22, name: "学生数据", itemStyle: { color: "#6B7280" } },
-          { value: 18, name: "模板资源", itemStyle: { color: "#71717A" } },
-          { value: 12, name: "系统缓存", itemStyle: { color: "#A3A3A3" } },
+          { value: demo.storage[0], name: "课件文件", itemStyle: { color: "#64748B" } },
+          { value: demo.storage[1], name: "学生数据", itemStyle: { color: "#6B7280" } },
+          { value: demo.storage[2], name: "模板资源", itemStyle: { color: "#71717A" } },
+          { value: demo.storage[3], name: "系统缓存", itemStyle: { color: "#A3A3A3" } },
         ],
       },
     ],
@@ -1022,7 +1087,7 @@ function initCharts() {
     series: [
       {
         type: "bar",
-        data: [320, 280, 410, 380, 520, 460],
+        data: demo.monthlyOps,
         barWidth: 24,
         label: { show: true, position: "top", fontSize: 10, color: "#6B7C93" },
         itemStyle: { color: "#64748B", borderRadius: [4, 4, 0, 0] },
@@ -1290,169 +1355,219 @@ const scheduleData = {
 };
 const classList = ["高一(3)班", "高二(1)班", "高三(2)班"];
 const activeClass = ref("高一(3)班");
-const studentData = [
-  { name: "张明远", score: 92, trend: "up", status: "优秀" },
-  { name: "李华清", score: 85, trend: "up", status: "良好" },
-  { name: "王芳菲", score: 78, trend: "stable", status: "中等" },
-  { name: "赵鹏程", score: 65, trend: "down", status: "待提高" },
-  { name: "陈静茹", score: 88, trend: "up", status: "良好" },
-  { name: "刘浩然", score: 72, trend: "stable", status: "中等" },
-  { name: "周子轩", score: 58, trend: "down", status: "待提高" },
-  { name: "吴婉婷", score: 95, trend: "up", status: "优秀" },
-];
+// 学生名单与成绩取自统一演示数据源（同一天刷新结果恒定，跨天缓慢变化）
+const studentData = demo.students;
 const templates = [
   {
     id: "chinese_style",
     name: "中国风模版",
     desc: "水墨古典风格 · 适合语文/政治/文化课",
     type: "PPT",
-    used: 23,
   },
   {
     id: "spring",
     name: "春天主题模版",
     desc: "清新自然风格 · 适合生物/地理/科学课",
     type: "PPT",
-    used: 18,
   },
   {
     id: "history",
     name: "历史教育模版",
     desc: "古朴厚重风格 · 适合历史/文化类课程",
     type: "PPT",
-    used: 15,
   },
   {
     id: "first_class",
     name: "开学第一课模版",
     desc: "通用简洁风格 · 适合数学/英语/理化课",
     type: "PPT",
-    used: 21,
   },
   {
     id: "chapter4",
     name: "章节教学模版",
     desc: "结构分明风格 · 适合系统化章节教学",
     type: "PPT",
-    used: 12,
   },
   {
     id: "chinese_style",
     name: "语文精读课模版",
     desc: "背景→朗读→分析→拓展·深阅读",
     type: "教案",
-    used: 9,
   },
-];
+].map((t, i) => ({
+  ...t,
+  used: seededInt(`zqls-admin:${dateKey()}:tpl-used-${i}`, 8, 26),
+}));
 
-// ── 图表解读配置（写死的初始信息，供教师理解每个图的意义） ─────────
-const chartInfo = {
-  "ch-d1": {
-    desc: "统计本周每日课件生成数量，用于观察备课节奏与工作高峰。",
-    insight: "周五生成量最高（15 个），周一、周日较少，符合教学周节奏。",
-    suggest: "可将需打磨的课件安排在周一/周日低峰期制作，错峰提升质量。",
-  },
-  "ch-d2": {
-    desc: "各类课件的产出占比，反映备课资源的分配结构。",
-    insight: "PPT 课件占 45%，是当前主力产出，教案与试卷合计约 40%。",
-    suggest: "教案类占比偏低，可尝试用 AI 一键生成配套教案补齐缺口。",
-  },
-  "ch-d3": {
-    desc: "各学科课件生成数量对比，用于发现备课资源覆盖的强弱学科。",
-    insight: "数学（48 个）与物理（42 个）产出最高，语文（35 个）偏少。",
-    suggest: "语文、生物资源缺口明显，建议优先补充对应学科的专题模板。",
-  },
-  "ch-s1": {
-    desc: "以热力图呈现一周各节次课程安排的密度，辅助排课与教研调度。",
-    insight: "周一第 1 节、周三第 2 节课时最集中，下午第 7 节课程最少。",
-    suggest: "可将教研活动、公开课试讲安排在课时较少的时段。",
-  },
-  "ch-s2": {
-    desc: "各年级每周课时总量对比，用于评估各年级教学任务的轻重。",
-    insight: "高一周课时最多（12 节），高三最少（8 节），总量分布合理。",
-    suggest: "高三课时偏少，复习资料与习题可提前规划补足。",
-  },
-  "ch-s3": {
-    desc: "学期教学进度完成情况，对比计划进度判断教学是否滞后。",
-    insight: "当前完成 65%，略高于学期时间进度，教学节奏平稳。",
-    suggest: "保持当前进度，可将富余时间用于章节复习与查漏补缺。",
-  },
-  "ch-s4": {
-    desc: "每日课程类型构成（新授 / 复习 / 实验 / 其他）及周课时利用率。",
-    insight: "周一至周三以新授课为主，周五实验课集中，周课时利用率 82%。",
-    suggest: "实验课改到上午效果更佳，可提升学生课堂参与度。",
-  },
-  "ch-s5": {
-    desc: "各天实际课时占计划课时的比例，用于发现利用率偏低的教学日。",
-    insight: "周三利用率最高（90%），周二、周四低于 75%，存在课时空档。",
-    suggest: "可将课时空档用于答疑或教研活动，提升整体课时利用率。",
-  },
-  "ch-c1": {
-    desc: "以雷达图对比各班级五项核心能力维度，快速定位班级优劣势。",
-    insight: "高一（3）班基础知识最强（88），综合解题偏弱（58），维度不均衡。",
-    suggest: "建议高一（3）班增加综合题型专项训练，补齐短板。",
-  },
-  "ch-c2": {
-    desc: "各班级成绩分段人数分布，直观反映班级整体水平与分层情况。",
-    insight: "高三（2）班 90 分以上人数最多（14 人），且无 60 分以下学生。",
-    suggest: "可总结高三（2）班的高分经验，在年级内推广教学方法。",
-  },
-  "ch-c3": {
-    desc: "学生成绩与课堂参与度的散点图，用于发现需要重点关注的学生。",
-    insight: "成绩与参与度整体正相关，右下角少数学生参与度低且成绩下滑。",
-    suggest: "对参与度低的学生进行个别沟通，必要时安排导师结对帮扶。",
-  },
-  "ch-c4": {
-    desc: "历次考试各班级平均分走势，用于跟踪各班成绩变化与提升幅度。",
-    insight: "三个班级成绩均呈上升趋势，高二（1）班提升幅度最大（+12 分）。",
-    suggest: "可提炼高二（1）班的教学方法，作为教研组的借鉴案例。",
-  },
-  "ch-g1": {
-    desc: "本次考试各分数段人数分布，用于评估整体成绩形态（正态程度）。",
-    insight: "70-89 分中段人数最多（50 人），整体呈正态分布，及格率 86%。",
-    suggest: "中段学生提分空间最大，可重点进行中档题强化训练。",
-  },
-  "ch-g2": {
-    desc: "班级平均分近六周的变化趋势，并与年级平均分对比。",
-    insight: "班级均分由 72 分稳步升至 86 分，已稳定超过年级平均线。",
-    suggest: "关注第 3-4 周的上升放缓节点，避免成绩波动回撤。",
-  },
-  "ch-g3": {
-    desc: "各学科能力维度的雷达对比，用于发现学科内部的薄弱环节。",
-    insight: "物理实验探究维度（68）明显弱于概念理解（85），差距最大。",
-    suggest: "增加物理实验操作与探究类作业，强化动手实践能力。",
-  },
-  "ch-g4": {
-    desc: "学生个人成绩与班级平均分（76 分）的对比，用于个别学生诊断。",
-    insight: "张明远（92 分）领先均分 16 分，周子轩（58 分）低于均分 18 分。",
-    suggest: "对落后学生制定一对一提升计划，重点关注弱项学科。",
-  },
-  "ch-t1": {
-    desc: "各课件模板的使用次数排行，反映教师对不同模板的偏好程度。",
-    insight: "数学复习课模板使用最多（18 次），是教师最常用模板。",
-    suggest: "可将热门模板设为默认推荐，减少教师的搜索成本。",
-  },
-  "ch-t2": {
-    desc: "不同类型模板的占比，用于判断模板资源的供需是否匹配。",
-    insight: "PPT 模板占 60%，是核心需求；教案模板仅占 25%。",
-    suggest: "补充教案类模板，可覆盖更多备课场景，提升利用率。",
-  },
-  "ch-t3": {
-    desc: "三类模板近六月的使用趋势，用于观察需求的季节性波动。",
-    insight: "3 月开学季使用量最高，6 月后明显回落，呈季节性周期。",
-    suggest: "可在开学季前提前上新并预热模板，抓住需求高峰。",
-  },
-  "ch-ss": {
-    desc: "存储空间占用分布，用于排查存储瓶颈并规划清理策略。",
-    insight: "课件文件占 48%，是主要存储消耗；系统缓存占 12%。",
-    suggest: "建议每月清理系统缓存与旧版本课件，释放存储空间。",
-  },
-  "ch-ss2": {
-    desc: "每月系统操作次数，用于观察平台使用活跃度与高峰期。",
-    insight: "5 月操作最频繁（520 次），处于教学活跃期；寒假月份明显回落。",
-    suggest: "在活跃高峰期前完成系统维护与扩容，保障使用体验。",
-  },
+// ── 图表解读配置（全部由演示数据推导）─────────────────
+// 每条 insight / suggest 都从 demo 实时算出，所以不可能出现"文案写 15 个、
+// 图上却画 8 个"的矛盾。desc 是定性说明、与数值无关，保持固定。
+const KIND_LABELS = ["PPT 课件", "教案文档", "考试试卷", "课堂练习"];
+const DIM_LABELS = ["基础知识", "公式运用", "实验探究", "综合解题", "创新思维"];
+const GDIM_LABELS = ["概念理解", "公式应用", "实验探究", "计算能力", "分析推理"];
+const DIST_LABELS = ["60 分以下", "60-69", "70-79", "80-89", "90-100"];
+const TPL_LABELS = [
+  "数学复习课",
+  "物理新授课",
+  "化学实验课",
+  "语文精读课",
+  "英语听力课",
+];
+const GRADE_LABELS = ["高一", "高二", "高三"];
+const WEEK_FULL = ["周一", "周二", "周三", "周四", "周五"];
+const TREND_MONTHS = ["3月", "4月", "5月", "6月", "7月", "8月"];
+const OPS_MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月"];
+
+/** 返回按数值从大到小排列的下标序列 */
+const byDesc = (arr) => arr.map((_, i) => i).sort((a, b) => arr[b] - arr[a]);
+/** 一组数各占多大百分比（四舍五入） */
+const pctOf = (arr) => {
+  const total = sumOf(arr) || 1;
+  return arr.map((v) => Math.round((v / total) * 100));
 };
+
+const chartInfo = computed(() => {
+  const d = demo;
+  const wRank = byDesc(d.weekly);
+  const kPct = pctOf(d.kind);
+  const sRank = byDesc(d.subject);
+  const gRank = byDesc(d.gradeHours);
+  const uRank = byDesc(d.util);
+  const heatTop = d.heat.reduce((m, c) => (c[2] > m[2] ? c : m), d.heat[0]);
+  const utilAvg = Math.round(sumOf(d.util) / d.util.length);
+  const c1 = d.radar3[0];
+  const c1Hi = argMax(c1);
+  const c1Lo = argMin(c1);
+  const c2Top = byDesc(d.scoreDist3.map((a) => a[4]))[0];
+  const c4Gain = d.examTrend3.map((a) => a[a.length - 1] - a[0]);
+  const c4Top = byDesc(c4Gain)[0];
+  const g1Hi = argMax(d.gradeDist);
+  const g1Total = sumOf(d.gradeDist) || 1;
+  const g1Pass = Math.round(((g1Total - d.gradeDist[0]) / g1Total) * 100);
+  const phys = d.subjectRadar[0];
+  const g3Hi = argMax(phys);
+  const g3Lo = argMin(phys);
+  const stuAvg = Math.round(
+    sumOf(d.students.map((s) => s.score)) / d.students.length,
+  );
+  const stuTop = d.students[0];
+  const stuLow = d.students[d.students.length - 1];
+  const t2Pct = pctOf(d.templMix);
+  const t3Total = [0, 1, 2, 3, 4, 5].map((i) =>
+    d.templTrend.reduce((s, a) => s + a[i], 0),
+  );
+  const t3Rank = byDesc(t3Total);
+  const stPct = pctOf(d.storage);
+  const opsRank = byDesc(d.monthlyOps);
+
+  return {
+    "ch-d1": {
+      desc: "统计本周每日课件生成数量，用于观察备课节奏与工作高峰。",
+      insight: `周${WEEK_LABELS[wRank[0]]}生成量最高（${d.weekly[wRank[0]]} 个），周${WEEK_LABELS[wRank[6]]}最少（${d.weekly[wRank[6]]} 个），符合教学周节奏。`,
+      suggest: `可将需打磨的课件安排在周${WEEK_LABELS[wRank[6]]}低峰期制作，错峰提升质量。`,
+    },
+    "ch-d2": {
+      desc: "各类课件的产出占比，反映备课资源的分配结构。",
+      insight: `${KIND_LABELS[0]}占 ${kPct[0]}%，是当前主力产出，教案与试卷合计约 ${kPct[1] + kPct[2]}%。`,
+      suggest: `教案类占比 ${kPct[1]}%，可尝试用 AI 一键生成配套教案补齐缺口。`,
+    },
+    "ch-d3": {
+      desc: "各学科课件生成数量对比，用于发现备课资源覆盖的强弱学科。",
+      insight: `${SUBJECT_LABELS[sRank[0]]}（${d.subject[sRank[0]]} 个）与${SUBJECT_LABELS[sRank[1]]}（${d.subject[sRank[1]]} 个）产出最高，${SUBJECT_LABELS[sRank[5]]}（${d.subject[sRank[5]]} 个）偏少。`,
+      suggest: `${SUBJECT_LABELS[sRank[5]]}、${SUBJECT_LABELS[sRank[4]]}资源缺口明显，建议优先补充对应学科的专题模板。`,
+    },
+    "ch-s1": {
+      desc: "以热力图呈现一周各节次课程安排的密度，辅助排课与教研调度。",
+      insight: `${WEEK_FULL[heatTop[0]]}第 ${heatTop[1] + 1} 节课时最集中，整体排课密度适中。`,
+      suggest: "可将教研活动、公开课试讲安排在课时较少的时段。",
+    },
+    "ch-s2": {
+      desc: "各年级每周课时总量对比，用于评估各年级教学任务的轻重。",
+      insight: `${GRADE_LABELS[gRank[0]]}周课时最多（${d.gradeHours[gRank[0]]} 节），${GRADE_LABELS[gRank[2]]}最少（${d.gradeHours[gRank[2]]} 节），总量分布合理。`,
+      suggest: `${GRADE_LABELS[gRank[2]]}课时偏少，复习资料与习题可提前规划补足。`,
+    },
+    "ch-s3": {
+      desc: "学期教学进度完成情况，对比计划进度判断教学是否滞后。",
+      insight: `当前完成 ${d.progress}%，${d.progress >= 65 ? "略高于" : "基本持平于"}学期时间进度，教学节奏平稳。`,
+      suggest: "保持当前进度，可将富余时间用于章节复习与查漏补缺。",
+    },
+    "ch-s4": {
+      desc: "每日课程类型构成（新授 / 复习 / 实验 / 其他）及周课时利用率。",
+      insight: `周一至周三以新授课为主，周课时利用率约 ${utilAvg}%。`,
+      suggest: "实验课改到上午效果更佳，可提升学生课堂参与度。",
+    },
+    "ch-s5": {
+      desc: "各天实际课时占计划课时的比例，用于发现利用率偏低的教学日。",
+      insight: `周${WEEK_LABELS[uRank[0]]}利用率最高（${d.util[uRank[0]]}%），周${WEEK_LABELS[uRank[4]]}最低（${d.util[uRank[4]]}%），存在课时空档。`,
+      suggest: "可将课时空档用于答疑或教研活动，提升整体课时利用率。",
+    },
+    "ch-c1": {
+      desc: "以雷达图对比各班级五项核心能力维度，快速定位班级优劣势。",
+      insight: `${d.clsNames[0]}${DIM_LABELS[c1Hi]}最强（${c1[c1Hi]}），${DIM_LABELS[c1Lo]}偏弱（${c1[c1Lo]}），维度不均衡。`,
+      suggest: `建议${d.clsNames[0]}增加${DIM_LABELS[c1Lo]}专项训练，补齐短板。`,
+    },
+    "ch-c2": {
+      desc: "各班级成绩分段人数分布，直观反映班级整体水平与分层情况。",
+      insight: `${d.clsNames[c2Top]} 90 分以上人数最多（${d.scoreDist3[c2Top][4]} 人），分层结构清晰。`,
+      suggest: `可总结${d.clsNames[c2Top]}的高分经验，在年级内推广教学方法。`,
+    },
+    "ch-c3": {
+      desc: "学生成绩与课堂参与度的散点图，用于发现需要重点关注的学生。",
+      insight: "成绩与参与度整体正相关，左下角少数学生参与度低且成绩偏低。",
+      suggest: "对参与度低的学生进行个别沟通，必要时安排导师结对帮扶。",
+    },
+    "ch-c4": {
+      desc: "历次考试各班级平均分走势，用于跟踪各班成绩变化与提升幅度。",
+      insight: `三个班级成绩均呈上升趋势，${d.clsNames[c4Top]}提升幅度最大（+${c4Gain[c4Top]} 分）。`,
+      suggest: `可提炼${d.clsNames[c4Top]}的教学方法，作为教研组的借鉴案例。`,
+    },
+    "ch-g1": {
+      desc: "本次考试各分数段人数分布，用于评估整体成绩形态（正态程度）。",
+      insight: `${DIST_LABELS[g1Hi]} 段人数最多（${d.gradeDist[g1Hi]} 人），整体呈正态分布，及格率 ${g1Pass}%。`,
+      suggest: "中段学生提分空间最大，可重点进行中档题强化训练。",
+    },
+    "ch-g2": {
+      desc: "班级平均分近六周的变化趋势，并与年级平均分对比。",
+      insight: `班级均分由 ${d.classAvg[0]} 分升至 ${d.classAvg[5]} 分，${d.classAvg[5] >= 80 ? "已稳定超过" : "正在接近"}年级平均线。`,
+      suggest: "关注上升放缓的节点，避免成绩波动回撤。",
+    },
+    "ch-g3": {
+      desc: "各学科能力维度的雷达对比，用于发现学科内部的薄弱环节。",
+      insight: `物理${GDIM_LABELS[g3Hi]}维度（${phys[g3Hi]}）明显强于${GDIM_LABELS[g3Lo]}（${phys[g3Lo]}），差距最大。`,
+      suggest: `增加物理${GDIM_LABELS[g3Lo]}类作业，强化动手实践能力。`,
+    },
+    "ch-g4": {
+      desc: `学生个人成绩与班级平均分（${stuAvg} 分）的对比，用于个别学生诊断。`,
+      insight: `${stuTop.name}（${stuTop.score} 分）领先均分 ${stuTop.score - stuAvg} 分，${stuLow.name}（${stuLow.score} 分）低于均分 ${stuAvg - stuLow.score} 分。`,
+      suggest: "对落后学生制定一对一提升计划，重点关注弱项学科。",
+    },
+    "ch-t1": {
+      desc: "各课件模板的使用次数排行，反映教师对不同模板的偏好程度。",
+      insight: `${TPL_LABELS[0]}模板使用最多（${d.templUse[0]} 次），是教师最常用模板。`,
+      suggest: "可将热门模板设为默认推荐，减少教师的搜索成本。",
+    },
+    "ch-t2": {
+      desc: "不同类型模板的占比，用于判断模板资源的供需是否匹配。",
+      insight: `PPT 模板占 ${t2Pct[0]}%，是核心需求；教案模板占 ${t2Pct[1]}%。`,
+      suggest: "补充教案类模板，可覆盖更多备课场景，提升利用率。",
+    },
+    "ch-t3": {
+      desc: "三类模板近六月的使用趋势，用于观察需求的季节性波动。",
+      insight: `${TREND_MONTHS[t3Rank[0]]}使用量最高（合计 ${t3Total[t3Rank[0]]} 次），${TREND_MONTHS[t3Rank[5]]}最低。`,
+      suggest: "可在开学季前提前上新并预热模板，抓住需求高峰。",
+    },
+    "ch-ss": {
+      desc: "存储空间占用分布，用于排查存储瓶颈并规划清理策略。",
+      insight: `课件文件占 ${stPct[0]}%，是主要存储消耗；系统缓存占 ${stPct[3]}%。`,
+      suggest: "建议每月清理系统缓存与旧版本课件，释放存储空间。",
+    },
+    "ch-ss2": {
+      desc: "每月系统操作次数，用于观察平台使用活跃度与高峰期。",
+      insight: `${OPS_MONTHS[opsRank[0]]}操作最频繁（${d.monthlyOps[opsRank[0]]} 次），处于教学活跃期。`,
+      suggest: "在活跃高峰期前完成系统维护与扩容，保障使用体验。",
+    },
+  };
+});
 
 // ── 设置 ─────────────────────────────────
 const profile = ref({
@@ -2248,7 +2363,7 @@ function useTemplate(t) {
                   style="top: 20px"
                 >
                   <div
-                    v-for="(v, i) in [85, 72, 90, 68, 78]"
+                    v-for="(v, i) in demo.util"
                     :key="i"
                     class="flex flex-col items-center"
                     style="width: 40px"
