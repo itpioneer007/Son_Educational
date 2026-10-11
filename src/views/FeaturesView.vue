@@ -132,6 +132,18 @@ function subscribeStream(streamMsg) {
   };
 }
 
+// 生成 / 调整完成后，用后端落盘正文覆盖流式预览。
+// 流式增量是模型原始输出，而后端落盘前做了规整（LaTeX → Unicode 等），
+// 拉回替换一次即可保证「右侧预览 = 导出结果」。
+async function syncNormalizedContent(taskId, streamMsg) {
+  try {
+    const task = await getCoursewareTask(taskId);
+    if (task && task.content_md) streamMsg.content = task.content_md;
+  } catch {
+    /* 拉取失败时保留流式原文，不阻断流程 */
+  }
+}
+
 // 提交修改意见：按意见重新流式生成，产出新版正文
 async function handleReviseSend(text) {
   const panel = activePanel.value;
@@ -155,7 +167,15 @@ async function handleReviseSend(text) {
 
   try {
     await refineCoursewareTask(taskId, text);
-    subscribeProgress(taskId, subscribeStream(streamMsg));
+    subscribeProgress(taskId, {
+      ...subscribeStream(streamMsg),
+      onDone: async () => {
+        isGenerating.value = false;
+        streamMsg.streaming = false;
+        contentReady.value = true;
+        await syncNormalizedContent(taskId, streamMsg);
+      },
+    });
   } catch (err) {
     isGenerating.value = false;
     streamMsg.streaming = false;
@@ -2702,11 +2722,13 @@ async function callApiGenerate(apiType, params) {
     // 订阅 SSE：正文增量 + 进度
     subscribeProgress(taskId, {
       ...subscribeStream(streamMsg),
-      onDone: () => {
+      onDone: async () => {
         isGenerating.value = false;
         streamMsg.streaming = false;
         contentReady.value = true;
         showToast("内容已生成，可在右侧修改；要文件请点「导出最终内容」");
+        // 用后端规整后的正文替换流式原文，保证预览与导出一致
+        await syncNormalizedContent(taskId, streamMsg);
 
         // 将新记录写入历史列表（localStorage）
         // API type 映射: quiz → interactive, exam → exam

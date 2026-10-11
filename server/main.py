@@ -29,6 +29,7 @@ from ai_service import (
     stream_ppt_content, stream_doc_content, stream_quiz_content, stream_exam_content,
     chat_with_qwen_stream,
 )
+from text_normalize import normalize_math, normalize_md_indent
 from file_generator import (
     generate_pptx_from_template,
     generate_docx_from_markdown, generate_quiz_html_from_markdown,
@@ -441,7 +442,12 @@ async def _run_generation(task_id: str, params: dict):
             if task and task.get("progress", 5) < 85:
                 task["progress"] = task["progress"] + 1
 
-        text = _stream_text.get(task_id, "")
+        # 落盘前把模型偶发的 LaTeX 数学式降级为 Unicode 纯文本：
+        # 前端 marked 会吃掉 LaTeX 的反斜杠（\frac{1}{x} → frac{1}{x}），
+        # 导出侧也没有公式引擎，不转换会让「预览」和「导出」双双不可读。
+        # 随后补齐题目选项的行首缩进：Markdown 嵌套列表要求子项缩进 ≥ 题干内容列，
+        # 模型常只给 0~1 空格，会被 marked 拆成独立顶层列表（右侧预览散成一片）。
+        text = normalize_md_indent(normalize_math(_stream_text.get(task_id, "")))
         # 正文落独立文件；tasks.json 里不再保存全文
         _write_content(task_id, text)
         _update_task(
