@@ -13,6 +13,7 @@ import {
   exportCoursewareTask,
   subscribeProgress,
   downloadFile,
+  getCoursewareTask,
   getCoursewareHistory as fetchApiHistory,
   deleteCoursewareTask as deleteApiTask,
 } from "../composables/useCoursewareApi.js";
@@ -185,6 +186,11 @@ async function handleContentExport() {
         exporting.value = false;
         if (data.status === "completed" && data.filename) {
           generatedFilename.value = data.filename;
+          // 文件真正生成后，历史记录才从「待导出」变成「已完成」
+          markTaskRecord(taskId, {
+            status: "completed",
+            filename: data.filename,
+          });
           downloadFile(taskId, data.filename);
           showToast(`已导出：${data.filename}`);
         } else {
@@ -2644,6 +2650,15 @@ function refresh() {
   stats.value = getStats();
 }
 
+// 按 taskId 回写历史记录：导出完成后把「待导出(ready)」置为「已完成(completed)」，
+// 让归档列表的下载按钮与后端真实文件状态保持一致。
+function markTaskRecord(taskId, patch) {
+  const rec = history.value.find((r) => r.taskId === taskId);
+  if (!rec) return;
+  updateRecord(rec.id, patch);
+  refresh();
+}
+
 function selectPanel(id) {
   activePanel.value = id;
   sidebarOpen.value = false;
@@ -2691,18 +2706,21 @@ async function callApiGenerate(apiType, params) {
         isGenerating.value = false;
         streamMsg.streaming = false;
         contentReady.value = true;
-        showToast("内容已生成，可在右侧查看并修改");
+        showToast("内容已生成，可在右侧修改；要文件请点「导出最终内容」");
 
         // 将新记录写入历史列表（localStorage）
         // API type 映射: quiz → interactive, exam → exam
         const typeMap = { quiz: "interactive", exam: "exam" };
         const historyType = typeMap[apiType] || apiType;
+        // 注意状态是 ready 而不是 completed：此时只有正文，文件尚未导出
+        // （后端 filepath 仍为空，直接下载会「文件尚未准备好」）。导出成功后
+        // 再由 markTaskRecord 置为 completed，历史记录才真正可下载。
         addRecord({
           taskId,
           type: historyType,
           title: params.topic || "新生成的内容",
           subject: params.subject || "未分类",
-          status: "completed",
+          status: "ready",
         });
 
         history.value = getHistory();
@@ -3136,13 +3154,61 @@ function editRecord(item) {
   // 这里可以跳转到对应生成页面并加载内容
 }
 
-// 下载记录 — 真实 API 文件下载
-function downloadRecord(item) {
-  if (item.taskId) {
-    downloadFile(item.taskId, item.filename || item.title);
-    showToast(`正在下载：${item.filename || item.title}`);
-  } else {
+// 下载记录 — 以后端真实状态为准
+// 原先只要本地记录带了 taskId 就直接触发下载，但「正文已生成」并不等于
+// 「文件已导出」：后端此时 filepath 为空，下载会返回 400「文件尚未准备好」。
+// 现在先查询真实状态：已完成则直接下载；仅正文就绪则就地补一次导出再下载。
+async function downloadRecord(item) {
+  if (!item.taskId) {
     showToast("该记录暂无可用文件");
+    return;
+  }
+  try {
+    const task = await getCoursewareTask(item.taskId);
+
+    if (task.status === "completed" && task.filename) {
+      downloadFile(item.taskId, task.filename);
+      markTaskRecord(item.taskId, {
+        status: "completed",
+        filename: task.filename,
+      });
+      showToast(`正在下载：${task.filename}`);
+      return;
+    }
+
+    if (task.status === "exporting") {
+      showToast("文件正在导出，请稍候再试");
+      return;
+    }
+
+    if (task.status === "ready") {
+      showToast("文件正在生成，稍后自动下载…");
+      await exportCoursewareTask(item.taskId);
+      subscribeProgress(item.taskId, {
+        onDone: (data) => {
+          if (data.status === "completed" && data.filename) {
+            markTaskRecord(item.taskId, {
+              status: "completed",
+              filename: data.filename,
+            });
+            downloadFile(item.taskId, data.filename);
+            showToast(`已导出：${data.filename}`);
+          } else {
+            showToast("导出未完成，请稍后重试");
+          }
+        },
+        onError: (err) => showToast(`导出失败：${err.message}`),
+      });
+      return;
+    }
+
+    if (task.status === "failed") {
+      showToast(`该任务生成失败：${task.error || "未知原因"}`);
+      return;
+    }
+    showToast("文件尚未就绪，请稍候");
+  } catch (err) {
+    showToast(`下载失败：${err.message}`);
   }
 }
 
@@ -5406,9 +5472,15 @@ onUnmounted(() => {
                         </svg>
                       </button>
                       <button
-                        v-if="item.taskId && item.status === 'completed'"
+                        v-if="
+                          item.taskId &&
+                          (item.status === 'completed' ||
+                            item.status === 'ready')
+                        "
                         class="archive-action-btn archive-action-btn--download"
-                        title="下载课件"
+                        :title="
+                          item.status === 'completed' ? '下载课件' : '导出并下载'
+                        "
                         @click="downloadRecord(item)"
                       >
                         <svg
@@ -5926,14 +5998,20 @@ onUnmounted(() => {
               关闭
             </button>
             <button
-              v-if="previewItem.taskId && previewItem.status === 'completed'"
+              v-if="
+                previewItem.taskId &&
+                (previewItem.status === 'completed' ||
+                  previewItem.status === 'ready')
+              "
               class="preview-btn preview-btn--primary"
               @click="
                 downloadRecord(previewItem);
                 showPreview = false;
               "
             >
-              下载课件
+              {{
+                previewItem.status === "completed" ? "下载课件" : "导出并下载"
+              }}
             </button>
           </div>
         </div>
@@ -10071,6 +10149,14 @@ onUnmounted(() => {
 }
 .archive-status-badge[data-status="failed"] .archive-status-dot {
   background: #ef4444;
+}
+/* 待导出：正文已生成、文件尚未排版导出（需再点一次导出才有文件） */
+.archive-status-badge[data-status="ready"] {
+  background: rgba(13, 148, 136, 0.1);
+  color: #0d9488;
+}
+.archive-status-badge[data-status="ready"] .archive-status-dot {
+  background: #14b8a6;
 }
 
 /* 操作按钮 */

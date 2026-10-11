@@ -45,10 +45,15 @@ const TYPE_LABELS = {
   ppt: '课件生成',
   doc: '教案生成',
   interactive: '教学题生成',
+  exam: '试卷生成',
 }
 
+// 历史记录状态。ready 表示「正文已生成、文件尚未导出」——
+// 与后端状态机对齐（ready → exporting → completed），避免把只完成正文
+// 的任务谎报成「已完成」，让用户点下载却拿到「文件尚未准备好」。
 const STATUS_LABELS = {
   completed: '已完成',
+  ready: '待导出',
   draft: '待完善',
   iterating: '优化中',
   failed: '失败',

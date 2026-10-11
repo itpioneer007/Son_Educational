@@ -217,6 +217,18 @@ export function subscribeProgress(taskId, callbacks) {
 }
 
 /**
+ * 查询单个任务的真实状态（含 status / filename / error）
+ * 用于下载前确认文件是否真的已导出，避免凭本地记录误判。
+ * @param {string} taskId
+ * @returns {Promise<Object>}
+ */
+export async function getCoursewareTask(taskId) {
+  const res = await fetch(`${API_BASE}/${taskId}`);
+  if (!res.ok) throw new Error(`查询任务失败: ${res.status}`);
+  return res.json();
+}
+
+/**
  * 下载生成的文件
  * @param {string} taskId
  * @param {string} filename
