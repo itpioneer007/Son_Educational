@@ -57,9 +57,7 @@ function getHomeDesc(id) {
     "course-resource":
       "浏览所有课程资源，查看课程详情与学习进度，点击即可开始学习。",
     "course-analysis": "选择课程查看能力雷达图与时间分配，获取课件制作建议。",
-    "classroom-activity":
-      "四大课堂活动工具：随堂抢答、实时投票、随机抽选、小组积分，提升课堂趣味与参与度。",
-    "qa-session": "课堂互动问答，支持学生提问、教师解答，促进课堂参与。",
+    "qa-session": "围绕本节内容提问，AI 给出参考解答，并同步到社区讨论。",
     "after-class": "课后深入探讨课程疑难点，巩固学习效果，拓展知识边界。",
     "ai-summary": "AI 自动生成课程学习总结，提炼核心知识点，评估掌握程度。",
   };
@@ -71,7 +69,6 @@ function getHomeBadge(id) {
   const map = {
     "course-resource": "资源库",
     "course-analysis": "数据看板",
-    "classroom-activity": "课堂活动",
     "qa-session": "互动",
     "after-class": "拓展",
     "ai-summary": "AI",
@@ -84,8 +81,7 @@ function getHomeKeywords(id) {
   const map = {
     "course-resource": ["课程浏览", "进度跟踪"],
     "course-analysis": ["雷达图", "能力画像"],
-    "classroom-activity": ["随堂抢答", "实时投票", "随机点名", "小组竞赛"],
-    "qa-session": ["实时问答", "课堂参与"],
+    "qa-session": ["提问解答", "同步社区"],
     "after-class": ["深度探讨", "知识拓展"],
     "ai-summary": ["智能总结", "掌握评估"],
   };
@@ -509,63 +505,12 @@ const aiSummaries = ref([
 
 // 视图状态
 const aiHubCourse = ref(null);
-const aiHubActiveTab = ref("analysis");
-const aiHubTabs = [
-  {
-    id: "analysis",
-    step: 1,
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="14" width="3" height="7" rx="1.5"/><rect x="10.5" y="8" width="3" height="13" rx="1.5"/><rect x="15" y="3" width="3" height="18" rx="1.5"/></svg>',
-    label: "课程分析",
-    desc: "AI能力画像评估",
-  },
-  {
-    id: "activity",
-    step: 2,
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="12" rx="3"/><circle cx="12" cy="11" r="2"/><path d="M8 17v2h8v-2"/></svg>',
-    label: "课堂互动",
-    desc: "随堂活动与抢答",
-  },
-  {
-    id: "qa",
-    step: 3,
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 01-9 9H3l3-3.5A9 9 0 1121 12z"/></svg>',
-    label: "边问边答",
-    desc: "互动问答巩固",
-  },
-  {
-    id: "afterclass",
-    step: 4,
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
-    label: "课后追问",
-    desc: "深入拓展探讨",
-  },
-];
-
 // 选择课程
 function selectAiHubCourse(course) {
   aiHubCourse.value = course;
-  aiHubActiveTab.value = "analysis";
-  resetQAState();
   nextTick(() => {
     initAiHubCharts();
   });
-}
-
-// 切换子标签
-function switchAiHubTab(tabId) {
-  aiHubActiveTab.value = tabId;
-  if (tabId === "analysis") {
-    nextTick(() => {
-      initAiHubCharts();
-    });
-  }
-}
-
-// 判断步骤是否已完成
-function getAiHubStepDone(tabId) {
-  const currentIdx = aiHubTabs.findIndex((t) => t.id === aiHubActiveTab.value);
-  const targetIdx = aiHubTabs.findIndex((t) => t.id === tabId);
-  return targetIdx <= currentIdx;
 }
 
 // ===== ECharts 图表 =====
@@ -676,52 +621,9 @@ const aiHubCourseQA = ref([
   },
 ]);
 
-// AI Hub 投票数据
-const currentVote = ref({
-  title: "本节课的教学节奏如何？",
-  options: [
-    { text: "偏快", count: 12 },
-    { text: "适中", count: 28 },
-    { text: "偏慢", count: 8 },
-    { text: "需要调整", count: 5 },
-  ],
-});
-const voteSelected = ref(null);
-const voteEnded = ref(false);
-function submitVote() {
-  if (voteSelected.value !== null) {
-    currentVote.value.options[voteSelected.value].count++;
-    voteEnded.value = true;
-  }
-}
+// ==================== 课后检测题库（按课程学科） ====================
 
-// 课堂互动区 QA 别名（兼容 AI Hub 子标签页调用）
-function qaSelectAnswer(idx) {
-  if (
-    !qaTimerRunning.value ||
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered
-  )
-    return;
-  qaSelectedAnswer.value = qaSelectedAnswer.value === idx ? -1 : idx;
-  quickAnswerQuestions.value[qaCurrentQuestion.value].selected =
-    qaSelectedAnswer.value === -1 ? undefined : qaSelectedAnswer.value;
-}
-function qaConfirmAnswer() {
-  if (qaSelectedAnswer.value === null) return;
-  if (quickAnswerQuestions.value[qaCurrentQuestion.value].answered) {
-    if (qaCurrentQuestion.value < quickAnswerQuestions.value.length - 1) {
-      qaSelectedAnswer.value = -1;
-      qaCurrentQuestion.value++;
-    }
-  } else {
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered = true;
-    qaSelectedAnswer.value = -1;
-  }
-}
-
-// ==================== 随堂抢答数据 ====================
-
-// 随堂抢答 - 按学科分类的题库
+// 课后检测题库：按课程学科分库，题干/选项/正确答案下标/解析
 const subjectQuestionBank = {
   default: [
     {
@@ -730,8 +632,6 @@ const subjectQuestionBank = {
       options: ["概念A", "概念B", "概念C", "概念D"],
       correct: 0,
       explanation: "核心概念是需要重点掌握的基础知识。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 2,
@@ -739,8 +639,6 @@ const subjectQuestionBank = {
       options: ["内容一", "内容二", "内容三", "内容四"],
       correct: 1,
       explanation: "重点内容需要反复练习来巩固。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 3,
@@ -748,8 +646,6 @@ const subjectQuestionBank = {
       options: ["记忆能力", "理解应用", "分析推理", "创新创造"],
       correct: 1,
       explanation: "理解应用是学习的关键环节。",
-      answered: false,
-      timer: 25,
     },
   ],
   物理: [
@@ -759,8 +655,6 @@ const subjectQuestionBank = {
       options: ["F=ma", "P=MV", "E=mc²", "W=Fs"],
       correct: 0,
       explanation: "牛顿第二定律：物体加速度与合外力成正比，F=ma。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 2,
@@ -768,8 +662,6 @@ const subjectQuestionBank = {
       options: ["匀速增大", "匀加速增大", "先快后慢", "保持不变"],
       correct: 1,
       explanation: "自由落体是匀加速直线运动，速度随时间均匀增大。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 3,
@@ -777,8 +669,6 @@ const subjectQuestionBank = {
       options: ["减少实验次数", "确保单一变量", "增加实验精度", "简化计算过程"],
       correct: 1,
       explanation: "控制变量法保证每次只改变一个变量，便于分析因果关系。",
-      answered: false,
-      timer: 25,
     },
   ],
   化学: [
@@ -788,8 +678,6 @@ const subjectQuestionBank = {
       options: ["温度", "浓度", "颜色", "催化剂"],
       correct: 2,
       explanation: "颜色是物理性质，一般不直接改变反应速率。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 2,
@@ -797,8 +685,6 @@ const subjectQuestionBank = {
       options: ["改变反应平衡", "降低活化能", "增加产物量", "消耗反应物"],
       correct: 1,
       explanation: "催化剂通过降低反应的活化能来加快反应速率。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 3,
@@ -806,8 +692,6 @@ const subjectQuestionBank = {
       options: ["加快", "减慢", "不变", "不确定"],
       correct: 0,
       explanation: "温度升高，分子运动加剧，有效碰撞增多，反应速率加快。",
-      answered: false,
-      timer: 20,
     },
   ],
   数学: [
@@ -817,8 +701,6 @@ const subjectQuestionBank = {
       options: ["导数为正", "导数为负", "导数为零", "二阶导为正"],
       correct: 0,
       explanation: "可导函数单调递增的充要条件是在区间内导数大于等于零。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 2,
@@ -826,8 +708,6 @@ const subjectQuestionBank = {
       options: ["图像法", "定义法", "导数法", "复合函数法"],
       correct: 1,
       explanation: "定义法（作差比较）是判断函数单调性的最基本方法。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 3,
@@ -835,8 +715,6 @@ const subjectQuestionBank = {
       options: ["链式法则", "乘积法则", "商法则", "加法法则"],
       correct: 0,
       explanation: "链式法则是复合函数求导的核心法则。",
-      answered: false,
-      timer: 20,
     },
   ],
   生物: [
@@ -846,8 +724,6 @@ const subjectQuestionBank = {
       options: ["提供能量", "控制物质进出", "储存遗传信息", "合成蛋白质"],
       correct: 1,
       explanation: "细胞膜具有选择透过性，控制物质进出细胞。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 2,
@@ -855,8 +731,6 @@ const subjectQuestionBank = {
       options: ["前期", "中期", "后期", "末期"],
       correct: 2,
       explanation: "有丝分裂后期着丝粒分裂，姐妹染色单体分开，染色体数目加倍。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 3,
@@ -864,8 +738,6 @@ const subjectQuestionBank = {
       options: ["遗传控制中心", "动力车间", "合成车间", "消化车间"],
       correct: 1,
       explanation: "线粒体是有氧呼吸的主要场所，被称为细胞的动力车间。",
-      answered: false,
-      timer: 20,
     },
   ],
   历史: [
@@ -880,8 +752,6 @@ const subjectQuestionBank = {
       ],
       correct: 1,
       explanation: "1839年林则徐在广东虎门主持销烟，体现了中国人民的抗英决心。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 2,
@@ -894,8 +764,6 @@ const subjectQuestionBank = {
       ],
       correct: 1,
       explanation: "辛亥革命推翻了统治中国两千多年的封建君主专制制度。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 3,
@@ -908,8 +776,6 @@ const subjectQuestionBank = {
       ],
       correct: 2,
       explanation: "五四运动标志着中国新民主主义革命的开端。",
-      answered: false,
-      timer: 25,
     },
   ],
   地理: [
@@ -919,8 +785,6 @@ const subjectQuestionBank = {
       options: ["地球自转", "太阳辐射", "海陆分布", "地形起伏"],
       correct: 1,
       explanation: "太阳辐射的纬度差异是大气环流形成的根本原因。",
-      answered: false,
-      timer: 25,
     },
     {
       id: 2,
@@ -933,8 +797,6 @@ const subjectQuestionBank = {
       ],
       correct: 2,
       explanation: "三圈环流形成了信风带、西风带和极地东风带。",
-      answered: false,
-      timer: 30,
     },
     {
       id: 3,
@@ -942,130 +804,55 @@ const subjectQuestionBank = {
       options: ["纬度位置", "海拔高度", "距海远近", "综合因素"],
       correct: 3,
       explanation: "气候类型分布受纬度、海陆位置、地形等多种因素综合影响。",
-      answered: false,
-      timer: 25,
     },
   ],
 };
 
-const quickAnswerQuestions = ref(
-  subjectQuestionBank.default.map((q) => ({ ...q })),
+// 课后检测：本节课程的配套练习题，全部平铺展示。
+// 与「抢答」时期的区别 —— 没有计时、没有上一题/下一题、没有「完成抢答」，
+// 点选选项即判即出反馈（对/错 + 解析），已作答的题不允许改答案。
+const quizQuestions = ref([]);
+
+// 取当前学科的题库；若本节视频有 focus 关键词，把命中的题目排到前面，
+// 让练习更贴合本节内容（原先 openQuickAnswer 里的那套相关性排序）。
+function buildQuiz(subject, focus) {
+  const bank = subjectQuestionBank[subject] || subjectQuestionBank.default;
+  const list = bank.map((q) => ({ ...q, selected: -1, answered: false }));
+  const kws = (focus || []).filter(Boolean);
+  if (!kws.length) return list;
+  const score = (q) => {
+    const text = q.question + (q.options || []).join("") + (q.explanation || "");
+    return kws.reduce((n, kw) => n + (text.includes(kw) ? 1 : 0), 0);
+  };
+  return list
+    .map((q, i) => ({ q, i }))
+    .sort((a, b) => score(b.q) - score(a.q) || a.i - b.i)
+    .map((s) => s.q);
+}
+
+const quizAnsweredCount = computed(
+  () => quizQuestions.value.filter((q) => q.answered).length,
+);
+const quizCorrectCount = computed(
+  () =>
+    quizQuestions.value.filter((q) => q.answered && q.selected === q.correct)
+      .length,
 );
 
-// 切换课程时更新题库并重置状态
-function resetQAState(subjectOverride) {
-  const subject =
-    subjectOverride ||
-    aiHubCourse?.value?.subject ||
-    currentCourse?.value?.subject ||
-    "default";
-  const bank = subjectQuestionBank[subject] || subjectQuestionBank.default;
-  quickAnswerQuestions.value = bank.map((q) => ({ ...q }));
-  qaCurrentQuestion.value = 0;
-  qaStarted.value = false;
-  qaTimerRunning.value = false;
-  if (qaTimerInterval) {
-    clearInterval(qaTimerInterval);
-    qaTimerInterval = null;
-  }
-  qaTotalTime.value = 0;
-  qaTotalTimeLeft.value = 0;
-  qaSelectedAnswer.value = -1;
-}
-const qaCurrentQuestion = ref(0);
-const qaTimerRunning = ref(false);
-const qaStarted = ref(false);
-const qaTotalTime = ref(0);
-const qaTotalTimeLeft = ref(0);
-const qaSelectedAnswer = ref(-1);
-let qaTimerInterval = null;
-
-const qaLeaderboard = ref([
-  { name: "李四", score: 5, time: 2.3 },
-  { name: "王五", score: 5, time: 3.1 },
-  { name: "张三", score: 4, time: 1.8 },
-  { name: "赵六", score: 3, time: 4.2 },
-  { name: "陈七", score: 3, time: 5.0 },
-]);
-
-const qaAllAnswered = () => quickAnswerQuestions.value.every((q) => q.answered);
-
-function startQATimer() {
-  qaStarted.value = true;
-  qaTimerRunning.value = true;
-  const total = quickAnswerQuestions.value.reduce((sum, q) => sum + q.timer, 0);
-  qaTotalTime.value = total;
-  qaTotalTimeLeft.value = total;
-  qaTimerInterval = setInterval(() => {
-    qaTotalTimeLeft.value--;
-    if (qaTotalTimeLeft.value <= 0) {
-      // time's up — auto-reveal all unanswered questions
-      quickAnswerQuestions.value.forEach((q) => {
-        if (!q.answered) q.answered = true;
-      });
-      stopQATimer();
-    }
-  }, 1000);
+// 依据当前课程/视频重新装载题目（切课程、切视频都会走这里）
+function loadLessonQuiz() {
+  const subject = currentCourse.value?.subject || "default";
+  const video = playingVideo.value || currentVideos.value[0];
+  quizQuestions.value = buildQuiz(subject, video?.focus);
 }
 
-function stopQATimer() {
-  qaTimerRunning.value = false;
-  if (qaTimerInterval) {
-    clearInterval(qaTimerInterval);
-    qaTimerInterval = null;
-  }
-}
-
-function nextQAQuestion() {
-  // auto-reveal current answer before moving
-  if (!quickAnswerQuestions.value[qaCurrentQuestion.value].answered) {
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered = true;
-  }
-  if (qaAllAnswered()) {
-    stopQATimer();
-    return;
-  }
-  if (qaCurrentQuestion.value < quickAnswerQuestions.value.length - 1) {
-    qaSelectedAnswer.value =
-      quickAnswerQuestions.value[qaCurrentQuestion.value + 1].selected ?? -1;
-    qaCurrentQuestion.value++;
-  }
-}
-function submitQA() {
-  if (!quickAnswerQuestions.value[qaCurrentQuestion.value].answered) {
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered = true;
-  }
-  stopQATimer();
-}
-
-function prevQAQuestion() {
-  if (qaCurrentQuestion.value > 0) {
-    qaSelectedAnswer.value =
-      quickAnswerQuestions.value[qaCurrentQuestion.value - 1].selected ?? -1;
-    qaCurrentQuestion.value--;
-  }
-}
-
-function selectQAAnswer(idx) {
-  if (
-    !qaTimerRunning.value ||
-    quickAnswerQuestions.value[qaCurrentQuestion.value].answered
-  )
-    return;
-  qaSelectedAnswer.value = qaSelectedAnswer.value === idx ? -1 : idx;
-  quickAnswerQuestions.value[qaCurrentQuestion.value].selected =
-    qaSelectedAnswer.value === -1 ? undefined : qaSelectedAnswer.value;
-}
-
-function resetQAQuestion() {
-  stopQATimer();
-  qaStarted.value = false;
-  quickAnswerQuestions.value.forEach((q) => {
-    q.answered = false;
-    q.selected = undefined;
-  });
-  qaSelectedAnswer.value = -1;
-  qaCurrentQuestion.value = 0;
+// 点选即判：记录选择并标记已答，模板据此渲染对错样式与解析。
+// 已作答的题目直接忽略点击，避免「改到对为止」。
+function selectQuizOption(qIndex, optIndex) {
+  const q = quizQuestions.value[qIndex];
+  if (!q || q.answered) return;
+  q.selected = optIndex;
+  q.answered = true;
 }
 
 // ==================== 课程分析
@@ -1382,42 +1169,8 @@ function goGenerateKit(type) {
   router.push({ path: "/features", query: { type, topic: video.title } });
 }
 
-// 「随堂抢答」：不再跳转，直接在本页以弹层打开。
-// 题库按当前课程的学科选取（物理/化学/数学/生物/历史/地理），
-// 题目内容因而与本节课程相关；判定/计时/连击等逻辑复用下方既有实现。
-const showQuickAnswer = ref(false);
-
-function openQuickAnswer() {
-  const subject = currentCourse.value?.subject || "default";
-  // 优先用本节视频的 focus 关键词去匹配更贴题的题目
-  const focus = (playingVideo.value?.focus || []).join(" ");
-  resetQAState(subject);
-  const bank = subjectQuestionBank[subject] || subjectQuestionBank.default;
-  if (focus) {
-    const scored = bank
-      .map((q) => {
-        const text = q.question + q.options.join("") + (q.explanation || "");
-        let score = 0;
-        for (const kw of playingVideo.value?.focus || []) {
-          if (text.includes(kw)) score += 2;
-        }
-        return { q, score };
-      })
-      .sort((a, b) => b.score - a.score);
-    // 命中关键词的排前面，但保持原有题目集合不变
-    quickAnswerQuestions.value = scored.map((s) => ({ ...s.q }));
-  }
-  showQuickAnswer.value = true;
-}
-
-function closeQuickAnswer() {
-  showQuickAnswer.value = false;
-  if (qaTimerInterval) {
-    clearInterval(qaTimerInterval);
-    qaTimerInterval = null;
-  }
-  qaTimerRunning.value = false;
-}
+// 「课后检测」不再以弹层打开，已释放为课程资源卡片下方的常驻区块；
+// 题目随当前课程/视频自动装载，见 loadLessonQuiz()。
 
 // 当前播放视频在课程中的集数（第几集 / 共几集）
 const playingIndex = computed(() => {
@@ -2209,6 +1962,13 @@ onMounted(() => {
   bindSeedTopicsToCommunity();
 });
 
+// 课后检测随当前课程/视频自动装载；immediate 保证首次进入也有题目。
+watch(
+  [() => currentCourse.value?.id, () => playingVideo.value?.id],
+  () => loadLessonQuiz(),
+  { immediate: true },
+);
+
 // 把「课后追问」的示例话题与社区帖子一一对应起来：
 // 社区里已有同标题的帖子就复用，没有就新建一条，并在其下补 2 条示例评论。
 // 这样讨论数一进来就是真实评论数，而不是写死的数字。
@@ -2993,25 +2753,114 @@ watch(activeMenu, (newVal) => {
                             </svg>
                             <span>生成本节教案</span>
                           </button>
-                          <button
-                            class="video-kit-btn"
-                            @click="openQuickAnswer"
-                          >
+                        </div>
+                      </div>
+                      <!-- 课后检测：本节课程配套练习，点选即判、逐题给出反馈 -->
+                      <div class="lesson-quiz-card">
+                        <div class="lesson-quiz-head">
+                          <span class="lesson-quiz-title">
                             <svg
                               width="15"
                               height="15"
                               viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
+                              fill="currentColor"
                             >
-                              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
+                              <path
+                                d="M12 2l1.9 5.7 5.7 1.9-5.7 1.9L12 17l-1.9-5.5-5.7-1.9 5.7-1.9L12 2z"
+                              />
                             </svg>
-                            <span>随堂抢答</span>
-                          </button>
+                            课后检测
+                          </span>
+                          <span class="lesson-quiz-hint">
+                            共 {{ quizQuestions.length }} 题 · 已答
+                            {{ quizAnsweredCount }} 题 · 答对
+                            {{ quizCorrectCount }} 题
+                          </span>
                         </div>
+
+                        <ol class="lesson-quiz-list">
+                          <li
+                            v-for="(q, qi) in quizQuestions"
+                            :key="q.id"
+                            class="lesson-quiz-item"
+                          >
+                            <div class="lesson-quiz-q">
+                              <span class="lesson-quiz-num">{{ qi + 1 }}</span>
+                              <p class="lesson-quiz-text">{{ q.question }}</p>
+                            </div>
+                            <div class="lesson-quiz-options">
+                              <button
+                                v-for="(opt, oi) in q.options"
+                                :key="oi"
+                                type="button"
+                                class="lesson-quiz-option"
+                                :class="{
+                                  'is-correct': q.answered && oi === q.correct,
+                                  'is-wrong':
+                                    q.answered &&
+                                    oi === q.selected &&
+                                    oi !== q.correct,
+                                  'is-muted':
+                                    q.answered &&
+                                    oi !== q.correct &&
+                                    oi !== q.selected,
+                                }"
+                                :disabled="q.answered"
+                                @click="selectQuizOption(qi, oi)"
+                              >
+                                <span class="lesson-quiz-letter">{{
+                                  ["A", "B", "C", "D"][oi]
+                                }}</span>
+                                <span>{{ opt }}</span>
+                              </button>
+                            </div>
+                            <Transition name="quiz-feedback">
+                              <div
+                                v-if="q.answered"
+                                class="lesson-quiz-feedback"
+                                :class="{ 'is-wrong': q.selected !== q.correct }"
+                              >
+                                <span class="lesson-quiz-verdict">
+                                  <svg
+                                    v-if="q.selected === q.correct"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.6"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  >
+                                    <path d="M20 6L9 17l-5-5" />
+                                  </svg>
+                                  <svg
+                                    v-else
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.6"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                  >
+                                    <path d="M18 6L6 18M6 6l12 12" />
+                                  </svg>
+                                  {{
+                                    q.selected === q.correct
+                                      ? "答对了"
+                                      : "答错了，正确答案是 " +
+                                        ["A", "B", "C", "D"][q.correct]
+                                  }}
+                                </span>
+                                <p class="lesson-quiz-explain">
+                                  {{ q.explanation }}
+                                </p>
+                              </div>
+                            </Transition>
+                          </li>
+                        </ol>
                       </div>
                     </div>
 
@@ -3444,175 +3293,6 @@ watch(activeMenu, (newVal) => {
                 发起新讨论
               </button>
             </div>
-
-            <!-- 随堂抢答弹层（自「课堂互动」模块迁入，挂在课程资源每节课的配套资源里） -->
-            <Teleport to="body">
-              <Transition name="qa-modal">
-                <div
-                  v-if="showQuickAnswer"
-                  class="qa-modal__overlay"
-                  @click.self="closeQuickAnswer"
-                >
-                  <div class="qa-modal" role="dialog" aria-modal="true">
-                    <header class="qa-modal__head">
-                      <div class="qa-modal__title-wrap">
-                        <h2 class="qa-modal__title">随堂抢答</h2>
-                        <p class="qa-modal__sub">
-                          {{ currentCourse?.title || "本节课程" }} ·
-                          题库按学科自动匹配
-                        </p>
-                      </div>
-                      <button
-                        class="qa-modal__close"
-                        aria-label="关闭"
-                        @click="closeQuickAnswer"
-                      >
-                        <svg
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                        >
-                          <path d="M6 6l12 12M18 6L6 18" />
-                        </svg>
-                      </button>
-                    </header>
-
-                    <div class="qa-modal__body">
-                      <div class="qa-control-bar">
-                        <div class="qa-progress">
-                          <span class="qa-progress__label"
-                            >题目 {{ qaCurrentQuestion + 1 }} /
-                            {{ quickAnswerQuestions.length }}</span
-                          >
-                          <div class="qa-progress__bar">
-                            <div
-                              class="qa-progress__fill"
-                              :style="{
-                                width:
-                                  ((qaCurrentQuestion + 1) /
-                                    quickAnswerQuestions.length) *
-                                    100 +
-                                  '%',
-                              }"
-                            />
-                          </div>
-                        </div>
-                        <div
-                          class="qa-timer"
-                          :class="{
-                            'qa-timer--running': qaTimerRunning,
-                            'qa-timer--expired': qaTotalTimeLeft <= 0,
-                          }"
-                        >
-                          <span class="qa-timer__icon">⏳</span>
-                          <span class="qa-timer__value"
-                            >{{ qaTotalTimeLeft }}s</span
-                          >
-                        </div>
-                      </div>
-
-                      <div class="qa-question-card">
-                        <div class="qa-question-card__header">
-                          <span class="qa-question-card__num"
-                            >Q{{ qaCurrentQuestion + 1 }}</span
-                          >
-                          <span class="qa-question-card__type">⚡ 限时抢答</span>
-                        </div>
-                        <h3 class="qa-question-card__text">
-                          {{ quickAnswerQuestions[qaCurrentQuestion].question }}
-                        </h3>
-                        <div class="qa-question-card__options">
-                          <div
-                            v-for="(opt, idx) in quickAnswerQuestions[
-                              qaCurrentQuestion
-                            ].options"
-                            :key="idx"
-                            class="qa-option"
-                            :class="{
-                              'qa-option--selected': qaSelectedAnswer === idx,
-                              'qa-option--correct':
-                                quickAnswerQuestions[qaCurrentQuestion]
-                                  .answered &&
-                                idx ===
-                                  quickAnswerQuestions[qaCurrentQuestion]
-                                    .correct,
-                              'qa-option--wrong':
-                                quickAnswerQuestions[qaCurrentQuestion]
-                                  .answered &&
-                                quickAnswerQuestions[qaCurrentQuestion]
-                                  .selected >= 0 &&
-                                idx ===
-                                  quickAnswerQuestions[qaCurrentQuestion]
-                                    .selected &&
-                                idx !==
-                                  quickAnswerQuestions[qaCurrentQuestion]
-                                    .correct,
-                            }"
-                            @click="selectQAAnswer(idx)"
-                          >
-                            <span class="qa-option__letter">{{
-                              ["A", "B", "C", "D"][idx]
-                            }}</span>
-                            <span class="qa-option__text">{{ opt }}</span>
-                          </div>
-                        </div>
-                        <div
-                          v-if="quickAnswerQuestions[qaCurrentQuestion].answered"
-                          class="qa-explanation"
-                        >
-                          <span class="qa-explanation__icon">ℹ️</span>
-                          <p>
-                            {{
-                              quickAnswerQuestions[qaCurrentQuestion].explanation
-                            }}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div class="qa-actions">
-                        <button
-                          v-if="!qaStarted"
-                          class="qa-action-btn qa-action-btn--primary"
-                          @click="startQATimer"
-                        >
-                          ▶ 开始计时
-                        </button>
-                        <template v-if="qaStarted && qaTimerRunning">
-                          <button
-                            class="qa-action-btn qa-action-btn--secondary"
-                            @click="prevQAQuestion"
-                            :disabled="qaCurrentQuestion === 0"
-                          >
-                            ← 上一题
-                          </button>
-                          <button
-                            v-if="
-                              qaCurrentQuestion <
-                              quickAnswerQuestions.length - 1
-                            "
-                            class="qa-action-btn qa-action-btn--secondary"
-                            @click="nextQAQuestion"
-                          >
-                            下一题 →
-                          </button>
-                          <button
-                            v-else
-                            class="qa-action-btn qa-action-btn--success"
-                            @click="qaAllAnswered()"
-                          >
-                            ✓ 完成抢答
-                          </button>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Transition>
-            </Teleport>
 
             <!-- 5. AI总结助手 -->
             <div v-if="activeMenu === 'ai-summary'" class="content-panel">
@@ -5461,7 +5141,8 @@ watch(activeMenu, (newVal) => {
 }
 .video-kit-btns {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* 「随堂抢答」已释放为下方常驻的课后检测区块，这里只剩两个生成按钮 */
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
   margin-top: 12px;
 }
@@ -6874,364 +6555,215 @@ watch(activeMenu, (newVal) => {
   }
 }
 
-/* ==================== 随堂抢答弹层 ==================== */
-.qa-modal__overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1400;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(3px);
-}
-
-.qa-modal {
-  width: min(720px, 100%);
-  max-height: 90vh;
-  overflow-y: auto;
+/* ==================== 课后检测（本节练习） ==================== */
+.lesson-quiz-card {
   background: #fff;
-  border-radius: 20px;
-  box-shadow: 0 24px 60px rgba(10, 15, 26, 0.28);
-  display: flex;
-  flex-direction: column;
+  border: 1px solid rgba(76, 125, 255, 0.08);
+  border-radius: 14px;
+  padding: 18px 20px 20px;
 }
 
-.qa-modal__head {
+.lesson-quiz-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 22px 26px 16px;
-  border-bottom: 1px solid rgba(76, 125, 255, 0.12);
-}
-
-.qa-modal__title {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.qa-modal__sub {
-  margin: 5px 0 0;
-  font-size: 0.82rem;
-  color: #94a3b8;
-}
-
-.qa-modal__close {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 10px;
-  background: #f1f5f9;
-  color: #64748b;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.2s,
-    color 0.2s;
-}
-
-.qa-modal__close:hover {
-  background: #e2e8f0;
-  color: #1e293b;
-}
-
-.qa-modal__body {
-  padding: 22px 26px 26px;
-}
-
-.qa-modal-enter-active,
-.qa-modal-leave-active {
-  transition: opacity 0.22s ease;
-}
-
-.qa-modal-enter-from,
-.qa-modal-leave-to {
-  opacity: 0;
-}
-
-/* 随堂抢答 */
-.qa-control-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  gap: 16px;
-}
-.qa-progress {
-  flex: 1;
-}
-.qa-progress__label {
-  font-size: 0.8rem;
-  color: #64748b;
-  margin-bottom: 6px;
-  display: block;
-}
-.qa-progress__bar {
-  height: 6px;
-  background: #e2e8f0;
-  border-radius: 3px;
-  overflow: hidden;
-}
-.qa-progress__fill {
-  height: 100%;
-  background: linear-gradient(90deg, #667eea, #10b981);
-  border-radius: 3px;
-  transition: width 0.5s ease;
-}
-
-.qa-timer {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  padding: 12px 20px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 12px;
-  border: 2px solid #e2e8f0;
-  transition: all 0.3s ease;
+  margin-bottom: 14px;
 }
-.qa-timer--running {
-  border-color: #10b981;
-  background: rgba(16, 185, 129, 0.08);
-}
-.qa-timer--expired {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
-  animation: timer-pulse 0.6s ease infinite;
-}
-@keyframes timer-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.05);
-  }
-}
-.qa-timer__icon {
-  font-size: 1.2rem;
-}
-.qa-timer__value {
-  font-size: 1.4rem;
-  font-weight: 700;
+
+.lesson-quiz-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.86rem;
+  font-weight: 600;
   color: #1e293b;
+}
+.lesson-quiz-title svg {
+  color: #4c7dff;
+}
+
+.lesson-quiz-hint {
+  font-size: 0.72rem;
+  color: #94a3b8;
   font-variant-numeric: tabular-nums;
 }
 
-.qa-question-card {
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 20px;
-  padding: 28px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(226, 232, 240, 0.6);
-  margin-bottom: 20px;
-}
-.qa-question-card__header {
+.lesson-quiz-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lesson-quiz-item {
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.lesson-quiz-q {
+  display: flex;
+  align-items: flex-start;
   gap: 10px;
-  align-items: center;
-  margin-bottom: 16px;
 }
-.qa-question-card__num {
-  font-size: 1.1rem;
+
+.lesson-quiz-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(76, 125, 255, 0.1);
+  color: #4c7dff;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: #667eea;
-  background: rgba(102, 126, 234, 0.1);
-  padding: 4px 12px;
-  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
 }
-.qa-question-card__type {
-  font-size: 0.8rem;
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.1);
-  padding: 4px 10px;
-  border-radius: 6px;
-}
-.qa-question-card__text {
-  font-size: 1.15rem;
+
+.lesson-quiz-text {
+  margin: 0;
+  font-size: 0.88rem;
   font-weight: 600;
   color: #1e293b;
   line-height: 1.6;
-  margin: 0 0 20px 0;
 }
-.qa-question-card__options {
+
+.lesson-quiz-options {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 32px;
 }
 
-.qa-option {
+.lesson-quiz-option {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  border: 2px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.6);
-  transition: all 0.25s ease;
-  cursor: pointer;
-}
-.qa-option:hover:not(.qa-option--correct):not(.qa-option--wrong) {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.05);
-}
-.qa-option--selected {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.1);
-}
-.qa-option--correct {
-  border-color: #8b5cf6;
-  background: rgba(139, 92, 246, 0.1);
-}
-.qa-option--wrong {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.05);
-  opacity: 0.6;
-}
-.qa-option__letter {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: #f1f5f9;
-  font-weight: 700;
-  font-size: 0.8rem;
-  color: #64748b;
-  flex-shrink: 0;
-}
-.qa-option--correct .qa-option__letter {
-  background: #8b5cf6;
-  color: #fff;
-}
-.qa-option__text {
-  font-size: 0.9rem;
-  color: #334155;
-}
-
-.qa-explanation {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  margin-top: 16px;
-  padding: 14px 16px;
-  background: rgba(102, 126, 234, 0.06);
-  border-radius: 10px;
-  border-left: 3px solid #667eea;
-}
-.qa-explanation__icon {
-  font-size: 1rem;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.qa-explanation p {
-  font-size: 0.85rem;
-  color: #475569;
-  margin: 0;
+  gap: 8px;
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 0.82rem;
   line-height: 1.5;
-}
-
-.qa-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-.qa-action-btn {
-  padding: 10px 20px;
-  border-radius: 12px;
-  border: none;
-  font-size: 0.85rem;
-  font-weight: 600;
+  color: #334155;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 10px;
   cursor: pointer;
-  transition: all 0.25s ease;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
-.qa-action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.lesson-quiz-option:hover:not(:disabled) {
+  border-color: #4c7dff;
+  background: rgba(76, 125, 255, 0.05);
+  color: #1e293b;
 }
-.qa-action-btn--primary {
-  background: linear-gradient(135deg, #667eea, #764ba2);
+.lesson-quiz-option:disabled {
+  cursor: default;
+}
+
+.lesson-quiz-letter {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 答对：绿色高亮；答错：所选标红、正确项仍标绿，其余淡出 */
+.lesson-quiz-option.is-correct {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+  color: #047857;
+  font-weight: 600;
+}
+.lesson-quiz-option.is-correct .lesson-quiz-letter {
+  background: #10b981;
   color: #fff;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
-.qa-action-btn--primary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(102, 126, 234, 0.4);
+
+.lesson-quiz-option.is-wrong {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.06);
+  color: #b91c1c;
+  font-weight: 600;
 }
-.qa-action-btn--secondary {
-  background: rgba(255, 255, 255, 0.8);
+.lesson-quiz-option.is-wrong .lesson-quiz-letter {
+  background: #ef4444;
+  color: #fff;
+}
+
+.lesson-quiz-option.is-muted {
+  opacity: 0.55;
+}
+
+.lesson-quiz-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0 32px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border-left: 3px solid #10b981;
+  background: rgba(16, 185, 129, 0.06);
+}
+.lesson-quiz-feedback.is-wrong {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.lesson-quiz-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #047857;
+}
+.lesson-quiz-verdict svg {
+  flex-shrink: 0;
+}
+.lesson-quiz-feedback.is-wrong .lesson-quiz-verdict {
+  color: #b91c1c;
+}
+
+.lesson-quiz-explain {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
   color: #475569;
-  border: 1px solid #e2e8f0;
-}
-.qa-action-btn--secondary:hover:not(:disabled) {
-  background: #f8fafc;
-}
-.qa-action-btn--danger {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
-  color: #fff;
-}
-.qa-action-btn--reveal {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
 }
 
-.qa-action-btn--reset {
-  background: linear-gradient(135deg, #06b6d4, #0891b2);
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+.quiz-feedback-enter-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
-.qa-action-btn--reset:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(6, 182, 212, 0.4);
+.quiz-feedback-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
-/* 实时投票 */
-/* 随机抽选 */
-@keyframes pick-spin {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.06);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-/* 小组积分 */
 @media (max-width: 768px) {
-  .activity-tabs {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .qa-question-card__options {
+  .lesson-quiz-options {
     grid-template-columns: 1fr;
+    padding-left: 0;
   }
-  .group-card {
-    flex-direction: column;
-    gap: 12px;
-  }
-  .group-card__info {
-    min-width: auto;
-  }
-  .poll-bar-item {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .poll-bar-item__label {
-    width: 100%;
-  }
-  .poll-bar-item__meta {
-    width: 100%;
+  .lesson-quiz-feedback {
+    margin-left: 0;
   }
 }
 
@@ -7250,14 +6782,8 @@ watch(activeMenu, (newVal) => {
   .course-card:hover,
   .video-card:hover,
   .menu-item:hover,
-  .qa-question-card:hover,
-  .group-card:hover,
-  .roster-item:hover {
+  .lesson-quiz-option:hover {
     transform: none !important;
-  }
-
-  .pick-result--spinning {
-    animation: none !important;
   }
 }
 </style>
