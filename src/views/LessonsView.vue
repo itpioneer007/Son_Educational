@@ -4,8 +4,12 @@ import { useRouter } from "vue-router";
 import SiteNav from "../components/layout/SiteNav.vue";
 import * as echarts from "echarts";
 import { dateKey, seededInt, growingCount } from "../utils/demoData.js";
+import { useCommunity } from "../composables/useCommunity.js";
+import { useUserStore } from "../stores/userStore.js";
 
 const router = useRouter();
+const community = useCommunity();
+const userStore = useUserStore();
 
 // ==================== 状态管理 ====================
 // 当前激活的菜单项
@@ -26,12 +30,6 @@ const menuItems = [
     label: "课程分析",
     icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="14" width="3" height="7" rx="1.5"/><rect x="10.5" y="8" width="3" height="13" rx="1.5"/><rect x="15" y="3" width="3" height="18" rx="1.5"/></svg>',
     desc: "数据可视化分析",
-  },
-  {
-    id: "classroom-activity",
-    label: "课堂互动",
-    icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="12" rx="3"/><circle cx="12" cy="11" r="2"/><path d="M8 17v2h8v-2"/></svg>',
-    desc: "随堂活动管理",
   },
   {
     id: "qa-session",
@@ -438,13 +436,14 @@ const qaList = ref([
 ]);
 
 // ==================== 课后追问数据 ====================
+// 每条话题都绑定社区里的一个帖子：讨论数取帖子的真实评论数，
+// 点到「发起新讨论 / 评论」都会写进社区（addPost / addComment），跨页面同步。
 const topicsList = ref([
   {
     id: 1,
     title: "牛顿定律在实际生活中的应用",
     content:
       "除了课本中的例子，牛顿定律在体育运动、交通工具设计等领域有哪些具体应用？",
-    replies: 12,
     views: 156,
     author: "物理爱好者",
     time: "2小时前",
@@ -453,7 +452,6 @@ const topicsList = ref([
     id: 2,
     title: "化学反应速率的工业意义",
     content: "在化工生产中，如何通过控制反应条件来提高生产效率？",
-    replies: 8,
     views: 98,
     author: "化学探索者",
     time: "5小时前",
@@ -462,7 +460,6 @@ const topicsList = ref([
     id: 3,
     title: "函数单调性与导数的关系",
     content: "学习了导数之后，如何用导数来判断函数的单调性？",
-    replies: 15,
     views: 203,
     author: "数学思考者",
     time: "1天前",
@@ -471,7 +468,6 @@ const topicsList = ref([
     id: 4,
     title: "细胞器的协同工作",
     content: "细胞内的各种细胞器是如何协调配合完成生命活动的？",
-    replies: 6,
     views: 87,
     author: "生物迷",
     time: "2天前",
@@ -723,51 +719,9 @@ function qaConfirmAnswer() {
   }
 }
 
-// ==================== 课堂互动数据 ====================
+// ==================== 随堂抢答数据 ====================
 
-const activityTab = ref("quick-answer");
-
-const lessonActivityTabs = [
-  {
-    id: "quick-answer",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 4 14 10 14 10 22 20 10 14 10 14 2"/></svg>',
-    label: "随堂抢答",
-    desc: "限时竞答",
-  },
-  {
-    id: "poll",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="14" width="4" height="6" rx="1"/><rect x="10" y="8" width="4" height="12" rx="1"/><rect x="16" y="3" width="4" height="17" rx="1"/></svg>',
-    label: "实时投票",
-    desc: "数据决策",
-  },
-  {
-    id: "random-pick",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/><circle cx="15" cy="15" r="1.5" fill="currentColor"/></svg>',
-    label: "随机抽选",
-    desc: "公平互动",
-  },
-  {
-    id: "group-score",
-    icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2 2 0 01-2-2V5a2 2 0 012-2H6"/><path d="M18 9h1.5a2 2 0 002-2V5a2 2 0 00-2-2H18"/><path d="M6 3h12v4a6 6 0 01-12 0V3z"/><path d="M12 15v4"/><path d="M8 21h8"/></svg>',
-    label: "小组积分",
-    desc: "团队竞赛",
-  },
-];
-
-const students = ref([
-  { id: 1, name: "张三", avatar: "张" },
-  { id: 2, name: "李四", avatar: "李" },
-  { id: 3, name: "王五", avatar: "王" },
-  { id: 4, name: "赵六", avatar: "赵" },
-  { id: 5, name: "陈七", avatar: "陈" },
-  { id: 6, name: "刘八", avatar: "刘" },
-  { id: 7, name: "孙九", avatar: "孙" },
-  { id: 8, name: "周十", avatar: "周" },
-  { id: 9, name: "吴十一", avatar: "吴" },
-  { id: 10, name: "郑十二", avatar: "郑" },
-]);
-
-// 1. 随堂抢答 - 按学科分类的题库
+// 随堂抢答 - 按学科分类的题库
 const subjectQuestionBank = {
   default: [
     {
@@ -999,8 +953,12 @@ const quickAnswerQuestions = ref(
 );
 
 // 切换课程时更新题库并重置状态
-function resetQAState() {
-  const subject = aiHubCourse?.value?.subject || "default";
+function resetQAState(subjectOverride) {
+  const subject =
+    subjectOverride ||
+    aiHubCourse?.value?.subject ||
+    currentCourse?.value?.subject ||
+    "default";
   const bank = subjectQuestionBank[subject] || subjectQuestionBank.default;
   quickAnswerQuestions.value = bank.map((q) => ({ ...q }));
   qaCurrentQuestion.value = 0;
@@ -1108,104 +1066,6 @@ function resetQAQuestion() {
   });
   qaSelectedAnswer.value = -1;
   qaCurrentQuestion.value = 0;
-}
-
-// 2. 实时投票
-const polls = ref([
-  {
-    id: 1,
-    title: "你认为本节课最难理解的概念是什么？",
-    options: [
-      { label: "控制变量法", votes: 12, color: "#667eea" },
-      { label: "牛顿第二定律公式", votes: 8, color: "#10b981" },
-      { label: "实验误差分析", votes: 5, color: "#f59e0b" },
-      { label: "力的合成与分解", votes: 3, color: "#06b6d4" },
-    ],
-    total: 28,
-    active: true,
-  },
-  {
-    id: 2,
-    title: "你更喜欢哪种教学方式？",
-    options: [
-      { label: "传统讲授", votes: 5, color: "#667eea" },
-      { label: "小组合作探究", votes: 15, color: "#10b981" },
-      { label: "动手实验", votes: 18, color: "#f59e0b" },
-      { label: "多媒体互动", votes: 10, color: "#06b6d4" },
-    ],
-    total: 48,
-    active: true,
-  },
-]);
-const activePollId = ref(1);
-
-// 3. 随机抽选
-const pickHistory = ref([]);
-const pickingStudent = ref(null);
-const isPicking = ref(false);
-const pickMode = ref("single");
-
-function startRandomPick() {
-  if (isPicking.value) return;
-  isPicking.value = true;
-  pickingStudent.value = null;
-  const totalFrames = 30;
-  let frame = 0;
-  const interval = setInterval(() => {
-    const randomIndex = Math.floor(Math.random() * students.value.length);
-    pickingStudent.value = students.value[randomIndex];
-    frame++;
-    if (frame >= totalFrames) {
-      clearInterval(interval);
-      isPicking.value = false;
-      pickHistory.value.unshift({
-        name: pickingStudent.value.name,
-        avatar: pickingStudent.value.avatar,
-        time: new Date().toLocaleTimeString(),
-      });
-    }
-  }, 60);
-}
-
-// 4. 小组积分
-const groups = ref([
-  {
-    id: 1,
-    name: "第一组",
-    color: "#667eea",
-    score: 85,
-    members: ["张三", "李四", "王五"],
-  },
-  {
-    id: 2,
-    name: "第二组",
-    color: "#10b981",
-    score: 72,
-    members: ["赵六", "陈七"],
-  },
-  {
-    id: 3,
-    name: "第三组",
-    color: "#f59e0b",
-    score: 63,
-    members: ["刘八", "孙九"],
-  },
-  {
-    id: 4,
-    name: "第四组",
-    color: "#06b6d4",
-    score: 91,
-    members: ["周十", "吴十一", "郑十二"],
-  },
-]);
-
-function addGroupScore(groupId, points) {
-  const group = groups.value.find((g) => g.id === groupId);
-  if (group) group.score += points;
-}
-
-function removeStudent(id) {
-  students.value = students.value.filter((s) => s.id !== id);
 }
 
 // ==================== 课程分析
@@ -1520,6 +1380,43 @@ function goGenerateKit(type) {
   const video = playingVideo.value || currentVideos.value[0];
   if (!video) return;
   router.push({ path: "/features", query: { type, topic: video.title } });
+}
+
+// 「随堂抢答」：不再跳转，直接在本页以弹层打开。
+// 题库按当前课程的学科选取（物理/化学/数学/生物/历史/地理），
+// 题目内容因而与本节课程相关；判定/计时/连击等逻辑复用下方既有实现。
+const showQuickAnswer = ref(false);
+
+function openQuickAnswer() {
+  const subject = currentCourse.value?.subject || "default";
+  // 优先用本节视频的 focus 关键词去匹配更贴题的题目
+  const focus = (playingVideo.value?.focus || []).join(" ");
+  resetQAState(subject);
+  const bank = subjectQuestionBank[subject] || subjectQuestionBank.default;
+  if (focus) {
+    const scored = bank
+      .map((q) => {
+        const text = q.question + q.options.join("") + (q.explanation || "");
+        let score = 0;
+        for (const kw of playingVideo.value?.focus || []) {
+          if (text.includes(kw)) score += 2;
+        }
+        return { q, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    // 命中关键词的排前面，但保持原有题目集合不变
+    quickAnswerQuestions.value = scored.map((s) => ({ ...s.q }));
+  }
+  showQuickAnswer.value = true;
+}
+
+function closeQuickAnswer() {
+  showQuickAnswer.value = false;
+  if (qaTimerInterval) {
+    clearInterval(qaTimerInterval);
+    qaTimerInterval = null;
+  }
+  qaTimerRunning.value = false;
 }
 
 // 当前播放视频在课程中的集数（第几集 / 共几集）
@@ -2142,6 +2039,165 @@ function toggleQA(id) {
   }
 }
 
+// ── 边问边答：提交提问 ────────────────────────────────────────
+// 之前输入框是纯摆设（无 v-model、按钮无事件）。改为「提问即生成答案 + 同步到社区」：
+//   1) 在本页 qaList 顶部插入一条，自动展开，用户立刻看到问答；
+//   2) 以「提问」标签发到社区中心，形成可被他人讨论的话题。
+const qaDraft = ref("");
+
+// 依据提问里的学科关键词给出一段参考性回答。项目没有接入面向学生的问答模型，
+// 这里按关键词命中给结构化提示，答不上来时给通用引导，避免「提问后毫无反馈」。
+const QA_ANSWER_HINTS = [
+  {
+    keys: ["牛顿", "加速度", "力", "质量", "f=ma", "重力", "摩擦力"],
+    answer:
+      "围绕牛顿运动定律：先明确研究对象与受力分析，再判断合力方向。牛顿第二定律 F = ma 说明加速度与合外力成正比、与质量成反比；解题时按「选对象 → 找合力 → 定加速度 → 求未知量」四步走。",
+  },
+  {
+    keys: ["反应速率", "浓度", "温度", "催化剂", "化学"],
+    answer:
+      "影响化学反应速率的主要因素有浓度、温度、压强（气体）、催化剂和接触面积。一般温度每升高 10℃，速率约提高 2~4 倍；催化剂通过降低活化能加快反应，但自身质量与化学性质不变。",
+  },
+  {
+    keys: ["函数", "单调", "导数", "定义域", "增函数", "减函数"],
+    answer:
+      "判断函数单调性有两种路径：定义法——在区间内任取 x₁ < x₂，比较 f(x₁) 与 f(x₂)；导数法——在区间内 f′(x) > 0 则单调递增，f′(x) < 0 则单调递减。导数法更高效，注意先确定定义域。",
+  },
+  {
+    keys: ["线粒体", "叶绿体", "细胞器", "光合", "呼吸", "细胞"],
+    answer:
+      "线粒体是细胞的「动力车间」，进行有氧呼吸产生 ATP；叶绿体是植物细胞进行光合作用的场所，把光能转化为化学能。前者把有机物中的能量释放出来，后者把光能储存进有机物，两者在能量流动上互补。",
+  },
+  {
+    keys: ["历史", "鸦片", "辛亥", "五四", "战争", "革命"],
+    answer:
+      "回看历史事件要抓住「背景—过程—影响」三段。先厘清时代背景与主要矛盾，再梳理关键节点与力量对比，最后落到对社会性质、阶级关系与后续进程的影响，避免只背结论。",
+  },
+  {
+    keys: ["气候", "环流", "地形", "河流", "地理", "季风"],
+    answer:
+      "分析地理成因常用「纬度—海陆—地形—洋流」四要素。纬度决定热量带，海陆位置影响水汽与温差，地形改变水热再分配，洋流则对沿岸气候有增温增湿或降温减湿作用。",
+  },
+];
+
+function buildQaAnswer(question) {
+  const q = question.toLowerCase();
+  const hit = QA_ANSWER_HINTS.find((h) =>
+    h.keys.some((k) => q.includes(k.toLowerCase())),
+  );
+  if (hit) return hit.answer;
+  return "这是个值得展开的问题。建议先明确提问指向的知识点，再看它与本课重点的关联：尝试用「是什么—为什么—怎么用」三层去梳理，课堂上可结合实验或生活实例加深理解。";
+}
+
+// 找到与当前提问最相关的课程名（按关键词与课程标题的字符重合度）
+function matchRelatedCourse(question) {
+  const q = question;
+  let best = "";
+  let bestScore = 0;
+  for (const c of courses.value) {
+    let score = 0;
+    for (const ch of c.title) if (q.includes(ch)) score += 1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = c.title;
+    }
+  }
+  return bestScore >= 3 ? best : "通识答疑";
+}
+
+function submitQuestion() {
+  const question = qaDraft.value.trim();
+  if (!question) return;
+
+  const relatedCourse = matchRelatedCourse(question);
+  qaList.value.unshift({
+    id: Date.now(),
+    question,
+    answer: buildQaAnswer(question),
+    isExpanded: true,
+    relatedCourse,
+  });
+  qaDraft.value = "";
+
+  // 同步发布到社区中心，标签「提问」，便于沉淀与同行讨论
+  community.addPost({
+    tag: "提问",
+    title: question,
+    content: `来自「边问边答」的课堂提问（相关课程：${relatedCourse}）`,
+    author: userStore.getName() || "匿名老师",
+  });
+  showLessonToast("提问已提交，并同步到社区中心");
+}
+
+// ==================== 课后追问：发起新讨论 ====================
+// 之前「发起新讨论」按钮无事件、讨论数用写死的 replies。改为真实表单 + 真实计数。
+const topicDraft = ref({ title: "", content: "" });
+const showTopicForm = ref(false);
+const expandedTopicId = ref(null);
+
+// 每条话题对应社区里的一个帖子，讨论数 = 帖子下的评论数（真实、可增长）
+function topicPost(topic) {
+  return community.state.posts.find((p) => p.id === topic.postId) || null;
+}
+
+function topicReplyCount(topic) {
+  const post = topicPost(topic);
+  return post ? post.comments.length : 0;
+}
+
+function toggleTopic(topicId) {
+  expandedTopicId.value = expandedTopicId.value === topicId ? null : topicId;
+}
+
+function submitTopic() {
+  const title = topicDraft.value.title.trim();
+  const content = topicDraft.value.content.trim();
+  if (!title || !content) return;
+
+  const post = community.addPost({
+    tag: "教学讨论",
+    title,
+    content,
+    author: userStore.getName() || "匿名老师",
+  });
+
+  topicsList.value.unshift({
+    id: Date.now(),
+    postId: post ? post.id : null,
+    title,
+    content,
+    views: 1,
+    author: userStore.getName() || "匿名老师",
+    time: "刚刚",
+  });
+  topicDraft.value = { title: "", content: "" };
+  showTopicForm.value = false;
+  showLessonToast("已发起新讨论，并发布到社区中心");
+}
+
+// 向某条课后讨论追加评论（讨论数随之增长）
+const topicComment = ref({});
+function submitTopicComment(topicId) {
+  const text = (topicComment.value[topicId] || "").trim();
+  if (!text) return;
+  const topic = topicsList.value.find((t) => t.id === topicId);
+  if (!topic || !topic.postId) return;
+  community.addComment(topic.postId, text);
+  topicComment.value[topicId] = "";
+  showLessonToast("评论已发布");
+}
+
+// 轻提示（LessonsView 内统一出口）
+const lessonToast = ref("");
+let lessonToastTimer = null;
+function showLessonToast(msg) {
+  lessonToast.value = msg;
+  if (lessonToastTimer) clearTimeout(lessonToastTimer);
+  lessonToastTimer = setTimeout(() => {
+    lessonToast.value = "";
+  }, 2400);
+}
+
 // ==================== 生命周期 ====================
 onMounted(() => {
   // 初始加载时如果是课程分析页面，初始化图表
@@ -2150,7 +2206,33 @@ onMounted(() => {
       initCharts();
     });
   }
+  bindSeedTopicsToCommunity();
 });
+
+// 把「课后追问」的示例话题与社区帖子一一对应起来：
+// 社区里已有同标题的帖子就复用，没有就新建一条，并在其下补 2 条示例评论。
+// 这样讨论数一进来就是真实评论数，而不是写死的数字。
+function bindSeedTopicsToCommunity() {
+  for (const topic of topicsList.value) {
+    if (topic.postId) continue;
+    let post = community.state.posts.find((p) => p.title === topic.title);
+    if (!post) {
+      post = community.addPost({
+        tag: "教学讨论",
+        title: topic.title,
+        content: topic.content,
+        author: topic.author,
+      });
+    }
+    if (post) {
+      topic.postId = post.id;
+      if (!post.comments.length) {
+        community.addComment(post.id, "这个问题很实用，我上课也遇到过，蹲一个方案。", "李老师");
+        community.addComment(post.id, "建议结合具体课例展开，效果会更直观。", "陈老师");
+      }
+    }
+  }
+}
 
 // 监听菜单变化，清理图表
 watch(activeMenu, (newVal) => {
@@ -2913,7 +2995,7 @@ watch(activeMenu, (newVal) => {
                           </button>
                           <button
                             class="video-kit-btn"
-                            @click="goGenerateKit('quiz')"
+                            @click="openQuickAnswer"
                           >
                             <svg
                               width="15"
@@ -2925,9 +3007,9 @@ watch(activeMenu, (newVal) => {
                               stroke-linecap="round"
                               stroke-linejoin="round"
                             >
-                              <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z" />
+                              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" />
                             </svg>
-                            <span>生成本节练习</span>
+                            <span>随堂抢答</span>
                           </button>
                         </div>
                       </div>
@@ -3223,9 +3305,23 @@ watch(activeMenu, (newVal) => {
               <div class="qa-input-section">
                 <h3>🤔 有问题？立即提问</h3>
                 <div class="qa-input-box">
-                  <input type="text" placeholder="输入你的问题..." />
-                  <button class="submit-btn">提问</button>
+                  <input
+                    v-model="qaDraft"
+                    type="text"
+                    placeholder="输入你的问题..."
+                    @keyup.enter="submitQuestion"
+                  />
+                  <button
+                    class="submit-btn"
+                    :disabled="!qaDraft.trim()"
+                    @click="submitQuestion"
+                  >
+                    提问
+                  </button>
                 </div>
+                <p class="qa-input-hint">
+                  提交后会立即生成参考解答，并同步发布到社区中心
+                </p>
               </div>
             </div>
 
@@ -3241,8 +3337,9 @@ watch(activeMenu, (newVal) => {
                   v-for="topic in topicsList"
                   :key="topic.id"
                   class="topic-card"
+                  :class="{ 'topic-card--expanded': expandedTopicId === topic.id }"
                 >
-                  <div class="topic-header">
+                  <div class="topic-header" @click="toggleTopic(topic.id)">
                     <h3>{{ topic.title }}</h3>
                     <span class="topic-time">{{ topic.time }}</span>
                   </div>
@@ -3256,479 +3353,266 @@ watch(activeMenu, (newVal) => {
                     </div>
                     <div class="topic-stats">
                       <span aria-hidden="true">👁</span> {{ topic.views }}
-                      <span aria-hidden="true">💬</span> {{ topic.replies }}
+                      <span aria-hidden="true">💬</span>
+                      {{ topicReplyCount(topic) }}
+                    </div>
+                  </div>
+
+                  <!-- 展开：展示各用户真实讨论内容 + 可继续评论 -->
+                  <div
+                    v-if="expandedTopicId === topic.id"
+                    class="topic-discussion"
+                  >
+                    <div
+                      v-for="c in (topicPost(topic)?.comments || [])"
+                      :key="c.id"
+                      class="topic-comment"
+                    >
+                      <span
+                        class="author-avatar author-avatar--sm"
+                        aria-hidden="true"
+                        >{{ (c.author || "U").charAt(0) }}</span
+                      >
+                      <div class="topic-comment__body">
+                        <strong>{{ c.author }}</strong>
+                        <p>{{ c.content }}</p>
+                      </div>
+                    </div>
+                    <p
+                      v-if="!(topicPost(topic)?.comments || []).length"
+                      class="topic-comment--empty"
+                    >
+                      还没有人参与讨论，来说说你的想法吧
+                    </p>
+                    <div class="topic-comment-form">
+                      <input
+                        v-model="topicComment[topic.id]"
+                        type="text"
+                        placeholder="写下你的想法…"
+                        @keyup.enter="submitTopicComment(topic.id)"
+                      />
+                      <button
+                        :disabled="!(topicComment[topic.id] || '').trim()"
+                        @click="submitTopicComment(topic.id)"
+                      >
+                        评论
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <button class="new-topic-btn">
+              <!-- 发起新讨论：内联表单 -->
+              <div v-if="showTopicForm" class="topic-form">
+                <input
+                  v-model="topicDraft.title"
+                  type="text"
+                  placeholder="讨论标题，例如：如何设计一节有冲突感的导入？"
+                  maxlength="40"
+                />
+                <textarea
+                  v-model="topicDraft.content"
+                  rows="3"
+                  placeholder="补充你的教学场景、困惑或想讨论的问题…"
+                  maxlength="200"
+                ></textarea>
+                <div class="topic-form__actions">
+                  <button
+                    class="topic-form__cancel"
+                    @click="showTopicForm = false"
+                  >
+                    取消
+                  </button>
+                  <button
+                    class="topic-form__submit"
+                    :disabled="
+                      !topicDraft.title.trim() || !topicDraft.content.trim()
+                    "
+                    @click="submitTopic"
+                  >
+                    发布讨论
+                  </button>
+                </div>
+              </div>
+
+              <button
+                v-else
+                class="new-topic-btn"
+                @click="showTopicForm = true"
+              >
                 <span>+</span>
                 发起新讨论
               </button>
             </div>
 
-            <!-- 6. 课堂互动 -->
-            <div
-              v-if="activeMenu === 'classroom-activity'"
-              class="content-panel classroom-activity-panel"
-            >
-              <div class="panel-header panel-header--activity">
-                <h1>
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="3" y="7" width="18" height="10" rx="3" />
-                    <circle cx="8" cy="12" r="1.5" fill="currentColor" />
-                    <circle cx="16" cy="12" r="1.5" fill="currentColor" />
-                    <path d="M10 12h0" />
-                    <path d="M12 10v4" />
-                  </svg>
-                  课堂互动
-                </h1>
-                <p>随堂抢答 · 实时投票 · 随机抽选 · 小组积分</p>
-              </div>
-
-              <div class="activity-tabs">
-                <button
-                  v-for="tab in lessonActivityTabs"
-                  :key="tab.id"
-                  class="activity-tab"
-                  :class="{ 'activity-tab--active': activityTab === tab.id }"
-                  @click="activityTab = tab.id"
-                >
-                  <span class="activity-tab__icon" v-html="tab.icon"></span>
-                  <div class="activity-tab__text">
-                    <span class="activity-tab__label">{{ tab.label }}</span>
-                    <span class="activity-tab__desc">{{ tab.desc }}</span>
-                  </div>
-                </button>
-              </div>
-
-              <!-- 随堂抢答 -->
-              <div
-                v-if="activityTab === 'quick-answer'"
-                class="activity-section"
-              >
-                <div class="qa-control-bar">
-                  <div class="qa-progress">
-                    <span class="qa-progress__label"
-                      >题目 {{ qaCurrentQuestion + 1 }} /
-                      {{ quickAnswerQuestions.length }}</span
-                    >
-                    <div class="qa-progress__bar">
-                      <div
-                        class="qa-progress__fill"
-                        :style="{
-                          width:
-                            ((qaCurrentQuestion + 1) /
-                              quickAnswerQuestions.length) *
-                              100 +
-                            '%',
-                        }"
-                      />
-                    </div>
-                  </div>
-                  <div
-                    class="qa-timer"
-                    :class="{
-                      'qa-timer--running': qaTimerRunning,
-                      'qa-timer--expired': qaTotalTimeLeft <= 0,
-                    }"
-                  >
-                    <span class="qa-timer__icon">⏳</span>
-                    <span class="qa-timer__value">{{ qaTotalTimeLeft }}s</span>
-                  </div>
-                </div>
-                <div class="qa-question-card">
-                  <div class="qa-question-card__header">
-                    <span class="qa-question-card__num"
-                      >Q{{ qaCurrentQuestion + 1 }}</span
-                    >
-                    <span class="qa-question-card__type">⚡ 限时抢答</span>
-                  </div>
-                  <h3 class="qa-question-card__text">
-                    {{ quickAnswerQuestions[qaCurrentQuestion].question }}
-                  </h3>
-                  <div class="qa-question-card__options">
-                    <div
-                      v-for="(opt, idx) in quickAnswerQuestions[
-                        qaCurrentQuestion
-                      ].options"
-                      :key="idx"
-                      class="qa-option"
-                      :class="{
-                        'qa-option--selected': qaSelectedAnswer === idx,
-                        'qa-option--correct':
-                          quickAnswerQuestions[qaCurrentQuestion].answered &&
-                          idx ===
-                            quickAnswerQuestions[qaCurrentQuestion].correct,
-                        'qa-option--wrong':
-                          quickAnswerQuestions[qaCurrentQuestion].answered &&
-                          quickAnswerQuestions[qaCurrentQuestion].selected >=
-                            0 &&
-                          idx ===
-                            quickAnswerQuestions[qaCurrentQuestion].selected &&
-                          idx !==
-                            quickAnswerQuestions[qaCurrentQuestion].correct,
-                      }"
-                      @click="selectQAAnswer(idx)"
-                    >
-                      <span class="qa-option__letter">{{
-                        ["A", "B", "C", "D"][idx]
-                      }}</span>
-                      <span class="qa-option__text">{{ opt }}</span>
-                    </div>
-                  </div>
-                  <div
-                    v-if="quickAnswerQuestions[qaCurrentQuestion].answered"
-                    class="qa-explanation"
-                  >
-                    <span class="qa-explanation__icon">ℹ️</span>
-                    <p>
-                      {{ quickAnswerQuestions[qaCurrentQuestion].explanation }}
-                    </p>
-                  </div>
-                </div>
-                <div class="qa-actions">
-                  <button
-                    v-if="!qaStarted"
-                    class="qa-action-btn qa-action-btn--primary"
-                    @click="startQATimer"
-                  >
-                    ▶ 开始计时
-                  </button>
-                  <template v-if="qaStarted &amp;&amp; qaTimerRunning">
-                    <button
-                      class="qa-action-btn qa-action-btn--secondary"
-                      @click="prevQAQuestion"
-                      :disabled="qaCurrentQuestion === 0"
-                    >
-                      ← 上一题
-                    </button>
-                    <button
-                      v-if="qaCurrentQuestion < quickAnswerQuestions.length - 1"
-                      class="qa-action-btn qa-action-btn--secondary"
-                      @click="nextQAQuestion"
-                    >
-                      下一题 →
-                    </button>
-                    <button
-                      v-if="
-                        qaCurrentQuestion >= quickAnswerQuestions.length - 1
-                      "
-                      class="qa-action-btn qa-action-btn--reveal"
-                      @click="submitQA"
-                    >
-                      ✅ 提交
-                    </button>
-                    <button
-                      class="qa-action-btn qa-action-btn--reset"
-                      @click="resetQAQuestion"
-                    >
-                      🔄 重新开始
-                    </button>
-                  </template>
-                  <template v-if="qaStarted &amp;&amp; !qaTimerRunning">
-                    <button
-                      class="qa-action-btn qa-action-btn--secondary"
-                      @click="prevQAQuestion"
-                      :disabled="qaCurrentQuestion === 0"
-                    >
-                      ← 上一题
-                    </button>
-                    <button
-                      class="qa-action-btn qa-action-btn--reset"
-                      @click="resetQAQuestion"
-                    >
-                      🔄 重新开始
-                    </button>
-                  </template>
-                </div>
-                <div class="qa-leaderboard">
-                  <h3>🏅 抢答排行榜</h3>
-                  <div class="qa-leaderboard-list">
-                    <div
-                      v-for="(entry, idx) in qaLeaderboard"
-                      :key="entry.name"
-                      class="qa-leaderboard-item"
-                      :class="{ 'qa-leaderboard-item--top': idx < 3 }"
-                    >
-                      <span class="qa-leaderboard-item__rank">{{
-                        idx + 1
-                      }}</span>
-                      <span class="qa-leaderboard-item__name">{{
-                        entry.name
-                      }}</span>
-                      <span class="qa-leaderboard-item__score"
-                        >{{ entry.score }}分</span
-                      >
-                      <span class="qa-leaderboard-item__time"
-                        >{{ entry.time }}s</span
-                      >
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 实时投票 -->
-              <div v-if="activityTab === 'poll'" class="activity-section">
-                <div class="poll-selector">
-                  <label>选择投票主题：</label>
-                  <select v-model="activePollId">
-                    <option v-for="p in polls" :key="p.id" :value="p.id">
-                      {{ p.title }}
-                    </option>
-                  </select>
-                </div>
+            <!-- 随堂抢答弹层（自「课堂互动」模块迁入，挂在课程资源每节课的配套资源里） -->
+            <Teleport to="body">
+              <Transition name="qa-modal">
                 <div
-                  v-if="polls.find((p) => p.id === activePollId)"
-                  class="poll-card"
+                  v-if="showQuickAnswer"
+                  class="qa-modal__overlay"
+                  @click.self="closeQuickAnswer"
                 >
-                  <h3 class="poll-card__title">
-                    {{ polls.find((p) => p.id === activePollId).title }}
-                  </h3>
-                  <div class="poll-card__stats">
-                    <span class="poll-stat"
-                      >👥 已参与
-                      {{ polls.find((p) => p.id === activePollId).total }}
-                      人</span
-                    >
-                  </div>
-                  <div class="poll-results">
-                    <div
-                      v-for="(opt, idx) in polls.find(
-                        (p) => p.id === activePollId,
-                      ).options"
-                      :key="idx"
-                      class="poll-bar-item"
-                    >
-                      <div class="poll-bar-item__label">{{ opt.label }}</div>
-                      <div class="poll-bar-item__track">
-                        <div
-                          class="poll-bar-item__fill"
-                          :style="{
-                            width:
-                              (opt.votes /
-                                polls.find((p) => p.id === activePollId)
-                                  .total) *
-                                100 +
-                              '%',
-                            background: opt.color,
-                          }"
-                        />
+                  <div class="qa-modal" role="dialog" aria-modal="true">
+                    <header class="qa-modal__head">
+                      <div class="qa-modal__title-wrap">
+                        <h2 class="qa-modal__title">随堂抢答</h2>
+                        <p class="qa-modal__sub">
+                          {{ currentCourse?.title || "本节课程" }} ·
+                          题库按学科自动匹配
+                        </p>
                       </div>
-                      <div class="poll-bar-item__meta">
-                        <span class="poll-bar-item__count"
-                          >{{ opt.votes }}票</span
+                      <button
+                        class="qa-modal__close"
+                        aria-label="关闭"
+                        @click="closeQuickAnswer"
+                      >
+                        <svg
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
                         >
-                        <span class="poll-bar-item__percent"
-                          >{{
-                            Math.round(
-                              (opt.votes /
-                                polls.find((p) => p.id === activePollId)
-                                  .total) *
-                                100,
-                            )
-                          }}%</span
-                        >
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <button class="poll-action-btn">
-                  <span>✏️</span> 创建新投票
-                </button>
-              </div>
+                          <path d="M6 6l12 12M18 6L6 18" />
+                        </svg>
+                      </button>
+                    </header>
 
-              <!-- 随机抽选 -->
-              <div
-                v-if="activityTab === 'random-pick'"
-                class="activity-section"
-              >
-                <div class="pick-mode-switch">
-                  <button
-                    :class="{ 'pick-mode-btn--active': pickMode === 'single' }"
-                    class="pick-mode-btn"
-                    @click="pickMode = 'single'"
-                  >
-                    单人抽取
-                  </button>
-                  <button
-                    :class="{ 'pick-mode-btn--active': pickMode === 'group' }"
-                    class="pick-mode-btn"
-                    @click="pickMode = 'group'"
-                  >
-                    小组抽取
-                  </button>
-                </div>
-                <div class="pick-roulette">
-                  <div
-                    v-if="pickingStudent || pickHistory.length > 0"
-                    class="pick-result"
-                    :class="{ 'pick-result--spinning': isPicking }"
-                  >
-                    <span class="pick-result__avatar">{{
-                      (pickingStudent && pickingStudent.avatar) ||
-                      (pickHistory.length > 0 && pickHistory[0].avatar)
-                    }}</span>
-                    <span class="pick-result__name">{{
-                      (pickingStudent && pickingStudent.name) ||
-                      (pickHistory.length > 0 && pickHistory[0].name)
-                    }}</span>
-                  </div>
-                  <div
-                    v-if="!isPicking && pickHistory.length === 0"
-                    class="pick-placeholder"
-                  >
-                    <span class="pick-placeholder__icon">🎲</span>
-                    <span class="pick-placeholder__text"
-                      >点击下方按钮开始抽选</span
-                    >
-                  </div>
-                </div>
-                <button
-                  class="pick-button"
-                  :class="{ 'pick-button--running': isPicking }"
-                  @click="startRandomPick"
-                  :disabled="isPicking"
-                >
-                  <span>{{ isPicking ? "🎰" : "🎯" }}</span>
-                  {{ isPicking ? "抽取中..." : "随机抽选" }}
-                </button>
-                <div class="student-roster">
-                  <h3>📋 学生名单（{{ students.length }}人）</h3>
-                  <div class="roster-grid">
-                    <div
-                      v-for="student in students"
-                      :key="student.id"
-                      class="roster-item"
-                    >
-                      <span class="roster-item__avatar">{{
-                        student.avatar
-                      }}</span>
-                      <span class="roster-item__name">{{ student.name }}</span>
-                      <button
-                        class="roster-item__remove"
-                        @click="removeStudent(student.id)"
-                        title="移除"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div v-if="pickHistory.length > 0" class="pick-history">
-                  <h3>📝 抽选记录</h3>
-                  <div class="pick-history-list">
-                    <div
-                      v-for="(record, idx) in pickHistory.slice(0, 10)"
-                      :key="idx"
-                      class="pick-history-item"
-                    >
-                      <span class="pick-history-item__idx">{{ idx + 1 }}</span>
-                      <span class="pick-history-item__avatar">{{
-                        record.avatar
-                      }}</span>
-                      <span class="pick-history-item__name">{{
-                        record.name
-                      }}</span>
-                      <span class="pick-history-item__time">{{
-                        record.time
-                      }}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 小组积分 -->
-              <div
-                v-if="activityTab === 'group-score'"
-                class="activity-section"
-              >
-                <div class="group-scoreboard">
-                  <div
-                    v-for="group in [...groups].sort(
-                      (a, b) => b.score - a.score,
-                    )"
-                    :key="group.id"
-                    class="group-card"
-                  >
-                    <div
-                      class="group-card__rank"
-                      :style="{ color: group.color }"
-                    >
-                      {{
-                        [...groups]
-                          .sort((a, b) => b.score - a.score)
-                          .indexOf(group) + 1
-                      }}
-                    </div>
-                    <div class="group-card__info">
-                      <h3
-                        class="group-card__name"
-                        :style="{ color: group.color }"
-                      >
-                        {{ group.name }}
-                      </h3>
-                      <div class="group-card__members">
-                        <span
-                          v-for="(member, idx) in group.members"
-                          :key="idx"
-                          class="group-card__member"
-                          >{{ member }}</span
-                        >
-                      </div>
-                    </div>
-                    <div class="group-card__score-area">
-                      <div
-                        class="group-card__score"
-                        :style="{ color: group.color }"
-                      >
-                        {{ group.score
-                        }}<span class="group-card__score-unit">分</span>
-                      </div>
-                      <div class="group-card__bar">
+                    <div class="qa-modal__body">
+                      <div class="qa-control-bar">
+                        <div class="qa-progress">
+                          <span class="qa-progress__label"
+                            >题目 {{ qaCurrentQuestion + 1 }} /
+                            {{ quickAnswerQuestions.length }}</span
+                          >
+                          <div class="qa-progress__bar">
+                            <div
+                              class="qa-progress__fill"
+                              :style="{
+                                width:
+                                  ((qaCurrentQuestion + 1) /
+                                    quickAnswerQuestions.length) *
+                                    100 +
+                                  '%',
+                              }"
+                            />
+                          </div>
+                        </div>
                         <div
-                          class="group-card__bar-fill"
-                          :style="{
-                            width: (group.score / 100) * 100 + '%',
-                            background: group.color,
+                          class="qa-timer"
+                          :class="{
+                            'qa-timer--running': qaTimerRunning,
+                            'qa-timer--expired': qaTotalTimeLeft <= 0,
                           }"
-                        />
+                        >
+                          <span class="qa-timer__icon">⏳</span>
+                          <span class="qa-timer__value"
+                            >{{ qaTotalTimeLeft }}s</span
+                          >
+                        </div>
                       </div>
-                    </div>
-                    <div class="group-card__actions">
-                      <button
-                        class="group-score-btn group-score-btn--add"
-                        @click="addGroupScore(group.id, 5)"
-                      >
-                        +5
-                      </button>
-                      <button
-                        class="group-score-btn group-score-btn--add"
-                        @click="addGroupScore(group.id, 1)"
-                      >
-                        +1
-                      </button>
-                      <button
-                        class="group-score-btn group-score-btn--sub"
-                        @click="addGroupScore(group.id, -1)"
-                      >
-                        −1
-                      </button>
+
+                      <div class="qa-question-card">
+                        <div class="qa-question-card__header">
+                          <span class="qa-question-card__num"
+                            >Q{{ qaCurrentQuestion + 1 }}</span
+                          >
+                          <span class="qa-question-card__type">⚡ 限时抢答</span>
+                        </div>
+                        <h3 class="qa-question-card__text">
+                          {{ quickAnswerQuestions[qaCurrentQuestion].question }}
+                        </h3>
+                        <div class="qa-question-card__options">
+                          <div
+                            v-for="(opt, idx) in quickAnswerQuestions[
+                              qaCurrentQuestion
+                            ].options"
+                            :key="idx"
+                            class="qa-option"
+                            :class="{
+                              'qa-option--selected': qaSelectedAnswer === idx,
+                              'qa-option--correct':
+                                quickAnswerQuestions[qaCurrentQuestion]
+                                  .answered &&
+                                idx ===
+                                  quickAnswerQuestions[qaCurrentQuestion]
+                                    .correct,
+                              'qa-option--wrong':
+                                quickAnswerQuestions[qaCurrentQuestion]
+                                  .answered &&
+                                quickAnswerQuestions[qaCurrentQuestion]
+                                  .selected >= 0 &&
+                                idx ===
+                                  quickAnswerQuestions[qaCurrentQuestion]
+                                    .selected &&
+                                idx !==
+                                  quickAnswerQuestions[qaCurrentQuestion]
+                                    .correct,
+                            }"
+                            @click="selectQAAnswer(idx)"
+                          >
+                            <span class="qa-option__letter">{{
+                              ["A", "B", "C", "D"][idx]
+                            }}</span>
+                            <span class="qa-option__text">{{ opt }}</span>
+                          </div>
+                        </div>
+                        <div
+                          v-if="quickAnswerQuestions[qaCurrentQuestion].answered"
+                          class="qa-explanation"
+                        >
+                          <span class="qa-explanation__icon">ℹ️</span>
+                          <p>
+                            {{
+                              quickAnswerQuestions[qaCurrentQuestion].explanation
+                            }}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div class="qa-actions">
+                        <button
+                          v-if="!qaStarted"
+                          class="qa-action-btn qa-action-btn--primary"
+                          @click="startQATimer"
+                        >
+                          ▶ 开始计时
+                        </button>
+                        <template v-if="qaStarted && qaTimerRunning">
+                          <button
+                            class="qa-action-btn qa-action-btn--secondary"
+                            @click="prevQAQuestion"
+                            :disabled="qaCurrentQuestion === 0"
+                          >
+                            ← 上一题
+                          </button>
+                          <button
+                            v-if="
+                              qaCurrentQuestion <
+                              quickAnswerQuestions.length - 1
+                            "
+                            class="qa-action-btn qa-action-btn--secondary"
+                            @click="nextQAQuestion"
+                          >
+                            下一题 →
+                          </button>
+                          <button
+                            v-else
+                            class="qa-action-btn qa-action-btn--success"
+                            @click="qaAllAnswered()"
+                          >
+                            ✓ 完成抢答
+                          </button>
+                        </template>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              </Transition>
+            </Teleport>
 
             <!-- 5. AI总结助手 -->
             <div v-if="activeMenu === 'ai-summary'" class="content-panel">
@@ -3896,6 +3780,10 @@ watch(activeMenu, (newVal) => {
         </div>
       </div>
     </footer>
+
+    <Transition name="lesson-toast">
+      <div v-if="lessonToast" class="lesson-toast">{{ lessonToast }}</div>
+    </Transition>
   </div>
 </template>
 
@@ -6258,6 +6146,194 @@ watch(activeMenu, (newVal) => {
   font-size: 1.5rem;
 }
 
+/* ── 话题展开与真实讨论内容 ────────────────────────── */
+.topic-card--expanded {
+  border-color: rgba(76, 125, 255, 0.4);
+  box-shadow: 0 8px 20px rgba(76, 125, 255, 0.12);
+}
+
+.topic-header {
+  cursor: pointer;
+}
+
+.topic-discussion {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(76, 125, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.topic-comment {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.author-avatar--sm {
+  width: 24px;
+  height: 24px;
+  font-size: 0.68rem;
+}
+
+.topic-comment__body strong {
+  display: block;
+  font-size: 0.82rem;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+
+.topic-comment__body p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.topic-comment--empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.topic-comment-form {
+  display: flex;
+  gap: 8px;
+}
+
+.topic-comment-form input {
+  flex: 1;
+  padding: 9px 14px;
+  border: 1.5px solid rgba(76, 125, 255, 0.22);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  outline: none;
+  background: #fafbff;
+  color: #1e293b;
+}
+
+.topic-comment-form input:focus {
+  border-color: #4c7dff;
+  box-shadow: 0 0 0 3px rgba(76, 125, 255, 0.1);
+}
+
+.topic-comment-form button {
+  padding: 9px 18px;
+  border: none;
+  border-radius: 10px;
+  background: #4c7dff;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topic-comment-form button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── 发起新讨论表单 ────────────────────────────── */
+.topic-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid rgba(76, 125, 255, 0.18);
+  border-radius: 16px;
+}
+
+.topic-form input,
+.topic-form textarea {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1.5px solid rgba(76, 125, 255, 0.2);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  outline: none;
+  resize: vertical;
+  background: #fafbff;
+  color: #1e293b;
+}
+
+.topic-form input:focus,
+.topic-form textarea:focus {
+  border-color: #4c7dff;
+  box-shadow: 0 0 0 3px rgba(76, 125, 255, 0.1);
+}
+
+.topic-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.topic-form__cancel {
+  padding: 10px 20px;
+  border: 1px solid rgba(76, 125, 255, 0.25);
+  border-radius: 10px;
+  background: #fff;
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topic-form__submit {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #4c7dff 0%, #6366f1 100%);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topic-form__submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── 轻提示 ─────────────────────────────────── */
+.lesson-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 12px 22px;
+  border-radius: 12px;
+  background: rgba(30, 41, 59, 0.92);
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 500;
+  z-index: 3000;
+  box-shadow: 0 10px 30px rgba(10, 15, 26, 0.22);
+}
+
+.lesson-toast-enter-active,
+.lesson-toast-leave-active {
+  transition:
+    opacity 0.24s ease,
+    transform 0.24s ease;
+}
+
+.lesson-toast-enter-from,
+.lesson-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 10px);
+}
+
+/* ── 边问边答：提交提示 ─────────────────────────── */
+.qa-input-hint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
 /* ==================== AI总结助手样式 ==================== */
 .ai-summaries {
   display: flex;
@@ -6787,73 +6863,6 @@ watch(activeMenu, (newVal) => {
   }
 }
 /* ==================== 课堂互动样式 ==================== */
-.classroom-activity-panel {
-}
-
-.panel-header--activity h1 {
-  background: linear-gradient(135deg, #667eea, #10b981);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.activity-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 28px;
-}
-
-.activity-tab {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 20px 12px 16px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 2px solid transparent;
-  border-radius: 16px;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  backdrop-filter: blur(8px);
-}
-
-.activity-tab:hover {
-  background: rgba(255, 255, 255, 0.9);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.12);
-}
-
-.activity-tab--active {
-  background: rgba(255, 255, 255, 0.95);
-  border-color: #667eea;
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
-}
-
-.activity-tab__icon {
-  font-size: 1.6rem;
-}
-.activity-tab__text {
-  text-align: center;
-}
-.activity-tab__label {
-  display: block;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #1e293b;
-}
-.activity-tab__desc {
-  display: block;
-  font-size: 0.7rem;
-  color: #94a3b8;
-  margin-top: 2px;
-}
-
-.activity-section {
-  animation: fadeSlideIn 0.35s ease;
-}
-
 @keyframes fadeSlideIn {
   from {
     opacity: 0;
@@ -6863,6 +6872,88 @@ watch(activeMenu, (newVal) => {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ==================== 随堂抢答弹层 ==================== */
+.qa-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+.qa-modal {
+  width: min(720px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(10, 15, 26, 0.28);
+  display: flex;
+  flex-direction: column;
+}
+
+.qa-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid rgba(76, 125, 255, 0.12);
+}
+
+.qa-modal__title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.qa-modal__sub {
+  margin: 5px 0 0;
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.qa-modal__close {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+
+.qa-modal__close:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.qa-modal__body {
+  padding: 22px 26px 26px;
+}
+
+.qa-modal-enter-active,
+.qa-modal-leave-active {
+  transition: opacity 0.22s ease;
+}
+
+.qa-modal-enter-from,
+.qa-modal-leave-to {
+  opacity: 0;
 }
 
 /* 随堂抢答 */
@@ -7104,233 +7195,8 @@ watch(activeMenu, (newVal) => {
   box-shadow: 0 6px 18px rgba(6, 182, 212, 0.4);
 }
 
-.qa-leaderboard {
-  margin-top: 8px;
-}
-.qa-leaderboard h3 {
-  font-size: 0.95rem;
-  color: #1e293b;
-  margin-bottom: 12px;
-}
-.qa-leaderboard-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.qa-leaderboard-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid #e2e8f0;
-  transition: all 0.25s ease;
-}
-.qa-leaderboard-item--top {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 215, 0, 0.08),
-    rgba(255, 255, 255, 0.6)
-  );
-  border-color: rgba(245, 158, 11, 0.3);
-}
-.qa-leaderboard-item__rank {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  font-weight: 700;
-  font-size: 0.85rem;
-  background: #f1f5f9;
-  color: #64748b;
-}
-.qa-leaderboard-item--top:nth-child(1) .qa-leaderboard-item__rank {
-  background: #fbbf24;
-  color: #fff;
-}
-.qa-leaderboard-item--top:nth-child(2) .qa-leaderboard-item__rank {
-  background: #94a3b8;
-  color: #fff;
-}
-.qa-leaderboard-item--top:nth-child(3) .qa-leaderboard-item__rank {
-  background: #d97706;
-  color: #fff;
-}
-.qa-leaderboard-item__name {
-  flex: 1;
-  font-weight: 600;
-  font-size: 0.9rem;
-  color: #1e293b;
-}
-.qa-leaderboard-item__score {
-  font-weight: 700;
-  font-size: 0.9rem;
-  color: #667eea;
-}
-.qa-leaderboard-item__time {
-  font-size: 0.8rem;
-  color: #94a3b8;
-  font-variant-numeric: tabular-nums;
-}
-
 /* 实时投票 */
-.poll-selector {
-  margin-bottom: 24px;
-}
-.poll-selector label {
-  font-size: 0.85rem;
-  color: #64748b;
-  margin-right: 10px;
-}
-.poll-selector select {
-  padding: 10px 16px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.8);
-  font-size: 0.9rem;
-  color: #1e293b;
-  min-width: 320px;
-  cursor: pointer;
-}
-
-.poll-card {
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 20px;
-  padding: 28px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(226, 232, 240, 0.6);
-  margin-bottom: 20px;
-}
-.poll-card__title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #1e293b;
-  margin: 0 0 6px 0;
-}
-.poll-card__stats {
-  margin-bottom: 20px;
-}
-.poll-stat {
-  font-size: 0.8rem;
-  color: #94a3b8;
-  background: #f1f5f9;
-  padding: 4px 12px;
-  border-radius: 20px;
-}
-
-.poll-results {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.poll-bar-item {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.poll-bar-item__label {
-  width: 140px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #334155;
-  flex-shrink: 0;
-}
-.poll-bar-item__track {
-  flex: 1;
-  height: 12px;
-  background: #f1f5f9;
-  border-radius: 6px;
-  overflow: hidden;
-}
-.poll-bar-item__fill {
-  height: 100%;
-  border-radius: 6px;
-  transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
-  min-width: 4px;
-}
-.poll-bar-item__meta {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  width: 80px;
-  flex-shrink: 0;
-}
-.poll-bar-item__count {
-  font-size: 0.8rem;
-  color: #64748b;
-}
-.poll-bar-item__percent {
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.poll-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 24px;
-  border-radius: 12px;
-  border: 2px dashed #e2e8f0;
-  background: transparent;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-  transition: all 0.25s ease;
-}
-.poll-action-btn:hover {
-  border-color: #667eea;
-  color: #667eea;
-  background: rgba(102, 126, 234, 0.05);
-}
-
 /* 随机抽选 */
-.pick-mode-switch {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
-  justify-content: center;
-}
-.pick-mode-btn {
-  padding: 10px 24px;
-  border-radius: 12px;
-  border: 2px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.6);
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-  transition: all 0.25s ease;
-}
-.pick-mode-btn--active {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.08);
-  color: #667eea;
-}
-
-.pick-roulette {
-  min-height: 180px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 20px;
-  border: 2px dashed #e2e8f0;
-  margin-bottom: 20px;
-}
-.pick-result {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-.pick-result--spinning {
-  animation: pick-spin 0.06s linear infinite;
-}
 @keyframes pick-spin {
   0% {
     transform: scale(1);
@@ -7342,278 +7208,7 @@ watch(activeMenu, (newVal) => {
     transform: scale(1);
   }
 }
-.pick-result__avatar {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2rem;
-  font-weight: 700;
-}
-.pick-result__name {
-  font-size: 1.3rem;
-  font-weight: 700;
-  color: #2d3748;
-}
-.pick-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-.pick-placeholder__icon {
-  font-size: 3rem;
-  opacity: 0.4;
-}
-.pick-placeholder__text {
-  font-size: 0.9rem;
-  color: #94a3b8;
-}
-
-.pick-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 auto 28px;
-  padding: 14px 40px;
-  border-radius: 14px;
-  border: none;
-  cursor: pointer;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
-  box-shadow: 0 6px 24px rgba(245, 158, 11, 0.35);
-  transition: all 0.3s ease;
-  display: flex;
-  justify-content: center;
-}
-.pick-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 32px rgba(245, 158, 11, 0.5);
-}
-.pick-button--running {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
-  box-shadow: 0 6px 24px rgba(239, 68, 68, 0.35);
-}
-
-.student-roster {
-  margin-bottom: 24px;
-}
-.student-roster h3 {
-  font-size: 0.9rem;
-  color: #475569;
-  margin-bottom: 12px;
-}
-.roster-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
-}
-.roster-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid #e2e8f0;
-  transition: all 0.2s ease;
-}
-.roster-item:hover {
-  border-color: #667eea;
-}
-.roster-item__avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #e8e4ff;
-  color: #5b4ad0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.roster-item__name {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #1e293b;
-  flex: 1;
-}
-.roster-item__remove {
-  opacity: 0;
-  transition: opacity 0.2s;
-  border: none;
-  background: none;
-  color: #ef4444;
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 2px 4px;
-}
-.roster-item:hover .roster-item__remove {
-  opacity: 1;
-}
-
-.pick-history h3 {
-  font-size: 0.9rem;
-  color: #475569;
-  margin-bottom: 10px;
-}
-.pick-history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.pick-history-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.4);
-  font-size: 0.85rem;
-}
-.pick-history-item__idx {
-  color: #94a3b8;
-  width: 20px;
-}
-.pick-history-item__avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: #e8e4ff;
-  color: #5b4ad0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.65rem;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.pick-history-item__name {
-  flex: 1;
-  font-weight: 500;
-  color: #1e293b;
-}
-.pick-history-item__time {
-  color: #94a3b8;
-  font-size: 0.8rem;
-}
-
 /* 小组积分 */
-.group-scoreboard {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.group-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px 24px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(226, 232, 240, 0.6);
-  transition: all 0.3s ease;
-}
-.group-card:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-  transform: translateX(4px);
-}
-.group-card__rank {
-  font-size: 1.8rem;
-  font-weight: 800;
-  width: 44px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.group-card__info {
-  min-width: 140px;
-}
-.group-card__name {
-  font-size: 1rem;
-  font-weight: 700;
-  margin: 0 0 6px 0;
-}
-.group-card__members {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.group-card__member {
-  font-size: 0.72rem;
-  color: #64748b;
-  background: #f1f5f9;
-  padding: 2px 8px;
-  border-radius: 6px;
-}
-.group-card__score-area {
-  flex: 1;
-}
-.group-card__score {
-  font-size: 1.6rem;
-  font-weight: 800;
-  margin-bottom: 6px;
-}
-.group-card__score-unit {
-  font-size: 0.75rem;
-  font-weight: 500;
-  opacity: 0.7;
-}
-.group-card__bar {
-  height: 8px;
-  background: #f1f5f9;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.group-card__bar-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-.group-card__actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.group-score-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.8);
-  font-size: 0.85rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.group-score-btn:hover {
-  transform: scale(1.08);
-}
-.group-score-btn--add {
-  color: #10b981;
-  border-color: #10b981;
-}
-.group-score-btn--add:hover {
-  background: rgba(16, 185, 129, 0.1);
-}
-.group-score-btn--sub {
-  color: #ef4444;
-  border-color: #ef4444;
-}
-.group-score-btn--sub:hover {
-  background: rgba(239, 68, 68, 0.1);
-}
-
 @media (max-width: 768px) {
   .activity-tabs {
     grid-template-columns: repeat(2, 1fr);
