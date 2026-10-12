@@ -17,19 +17,27 @@ import { seededInt } from "../utils/demoData.js";
 // 用户信息
 import { useUserStore } from "../stores/userStore.js";
 const userStore = useUserStore();
+// 全部可编辑字段都从本地存储读取，刷新后不丢
 const userInfo = reactive({
   name: userStore.getName() || "测试用户",
   avatar: userStore.getAvatar(),
-  email: "user@example.com",
-  birthday: "",
-  qq: "",
-  wechat: "",
-  motto: "",
+  email: userStore.state.email || "",
+  birthday: userStore.state.birthday || "",
+  qq: userStore.state.qq || "",
+  wechat: userStore.state.wechat || "",
+  motto: userStore.state.motto || "",
 });
 
-// 编辑状态
-const isEditingName = ref(false);
-const tempName = ref(userInfo.name);
+// 保存成功提示
+const saveToast = ref(false);
+let saveToastTimer = null;
+function showSaveToast() {
+  saveToast.value = true;
+  clearTimeout(saveToastTimer);
+  saveToastTimer = setTimeout(() => {
+    saveToast.value = false;
+  }, 2000);
+}
 
 // 发布想法
 const postContent = ref("");
@@ -1357,25 +1365,11 @@ function handleAvatarUpload(event) {
   if (file) {
     const reader = new FileReader();
     reader.onload = (e) => {
+      // 仅暂存到内存预览，统一由「保存资料」按钮落盘
       userInfo.avatar = e.target.result;
-      userStore.updateProfile({ avatar: userInfo.avatar });
     };
     reader.readAsDataURL(file);
   }
-}
-
-// 保存用户名
-function saveName() {
-  if (tempName.value.trim()) {
-    userInfo.name = tempName.value.trim();
-  }
-  isEditingName.value = false;
-}
-
-// 取消编辑
-function cancelEditName() {
-  tempName.value = userInfo.name;
-  isEditingName.value = false;
 }
 
 // 文件上传
@@ -1422,9 +1416,21 @@ function likePost(post) {
   post.likes++;
 }
 
-// 保存个人资料
+// 保存个人资料：把页面上全部可编辑字段一次性写入 localStorage
 function saveProfile() {
-  alert("个人资料保存成功！");
+  userStore.updateProfile({
+    name: (userInfo.name || "").trim() || "测试用户",
+    avatar: userInfo.avatar,
+    email: (userInfo.email || "").trim(),
+    birthday: userInfo.birthday,
+    qq: (userInfo.qq || "").trim(),
+    wechat: (userInfo.wechat || "").trim(),
+    motto: (userInfo.motto || "").trim(),
+  });
+  // 以存储层为准回填，保证界面与落盘结果一致
+  userInfo.name = userStore.getName();
+  userInfo.email = userStore.state.email || "";
+  showSaveToast();
 }
 
 // 生命周期钩子
@@ -1441,6 +1447,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  clearTimeout(saveToastTimer);
   window.removeEventListener("resize", handleResize);
   if (workChartInstance.value) {
     workChartInstance.value.dispose();
@@ -1472,7 +1479,9 @@ onUnmounted(() => {
             <span v-else>{{ userInfo.name.charAt(0) }}</span>
           </div>
           <h3 class="user-card__name">{{ userInfo.name }}</h3>
-          <p class="user-card__email">{{ userInfo.email }}</p>
+          <p class="user-card__email">
+            {{ userInfo.email || "未填写邮箱" }}
+          </p>
         </div>
 
         <nav class="profile-menu">
@@ -1604,50 +1613,24 @@ onUnmounted(() => {
 
           <div class="form-section">
             <label class="form-label">用户名</label>
-            <div class="name-edit">
-              <template v-if="isEditingName">
-                <input
-                  v-model="tempName"
-                  type="text"
-                  class="name-input"
-                  maxlength="20"
-                  @keyup.enter="saveName"
-                />
-                <button class="btn-icon btn-success" @click="saveName">
-                  ✓
-                </button>
-                <button class="btn-icon btn-cancel" @click="cancelEditName">
-                  ✕
-                </button>
-              </template>
-              <template v-else>
-                <span class="name-display">{{ userInfo.name }}</span>
-                <button class="btn-edit" @click="isEditingName = true">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                    <path
-                      d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                  编辑
-                </button>
-              </template>
-            </div>
+            <input
+              v-model="userInfo.name"
+              type="text"
+              class="form-input"
+              placeholder="请输入用户名"
+              maxlength="20"
+            />
           </div>
 
           <div class="form-section">
             <label class="form-label">邮箱</label>
-            <p class="info-text">{{ userInfo.email }}</p>
+            <input
+              v-model="userInfo.email"
+              type="email"
+              class="form-input"
+              placeholder="请输入邮箱地址"
+              maxlength="60"
+            />
           </div>
 
           <!-- 生日 -->
@@ -2421,6 +2404,25 @@ onUnmounted(() => {
         </div>
       </main>
     </div>
+
+    <!-- 保存成功提示：由「保存资料」按钮统一触发 -->
+    <Transition name="save-toast">
+      <div v-if="saveToast" class="save-toast">
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        资料已保存
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -2584,14 +2586,6 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05);
 }
 
-.info-text {
-  padding: 12px 16px;
-  background: #f2f4f7;
-  border-radius: 12px;
-  color: #475569;
-  font-size: 0.9375rem;
-}
-
 /* 表单标签带图标 */
 .form-label {
   display: flex;
@@ -2719,82 +2713,6 @@ onUnmounted(() => {
 .upload-btn svg {
   width: 18px;
   height: 18px;
-}
-
-/* 用户名编辑 */
-.name-edit {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.name-input {
-  flex: 1;
-  padding: 10px 16px;
-  border: 1px solid #6b7280;
-  border-radius: 12px;
-  font-size: 0.9375rem;
-  outline: none;
-}
-
-.name-display {
-  flex: 1;
-  padding: 10px 16px;
-  background: #f2f4f7;
-  border-radius: 12px;
-  font-size: 0.9375rem;
-  color: #0f172a;
-}
-
-.btn-edit {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  background: #f2f4f7;
-  border: none;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 0.875rem;
-  color: #475569;
-  transition: all 0.2s;
-}
-
-.btn-edit:hover {
-  background: #e5e7eb;
-}
-
-.btn-edit svg {
-  width: 16px;
-  height: 16px;
-}
-
-.btn-icon {
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: all 0.2s;
-}
-
-.btn-success {
-  background: #f2f4f7;
-  color: #374151;
-}
-
-.btn-success:hover {
-  background: #e5e7eb;
-}
-
-.btn-cancel {
-  background: #f2f4f7;
-  color: #6b7280;
-}
-
-.btn-cancel:hover {
-  background: #e5e7eb;
 }
 
 /* 使用记录 */
@@ -4411,6 +4329,36 @@ onUnmounted(() => {
     flex-direction: column;
     text-align: center;
   }
+}
+
+/* 保存成功提示 */
+.save-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 999px;
+  background: #10b981;
+  color: #ffffff;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  box-shadow: 0 10px 30px rgba(16, 185, 129, 0.32);
+  z-index: 1200;
+}
+
+.save-toast-enter-active,
+.save-toast-leave-active {
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.save-toast-enter-from,
+.save-toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
 }
 
 /* ==================== 无障碍支持 ==================== */
