@@ -11,6 +11,15 @@
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800;900&display=swap"
       rel="stylesheet"
     />
+    <!-- 隐藏 Vue DevTools（vite-plugin-vue-devtools）右下角的悬浮胶囊：
+         它只在 `npm run dev` 时注入，生产构建里没有这段 DOM。
+         只藏「胶囊 + 光晕」，不碰面板本身 —— 按 Alt+Shift+D 仍能唤出 DevTools 面板。 -->
+    <style>
+      #__vue-devtools-container__ .vue-devtools__anchor > .vue-devtools__panel,
+      #__vue-devtools-container__ .vue-devtools__anchor--glowing {
+        display: none !important;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>
