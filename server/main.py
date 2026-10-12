@@ -90,6 +90,22 @@ _tasks_lock = threading.Lock()
 # 只存在内存里（不落盘、不放进 _tasks），SSE 按游标增量推送给前端即时渲染。
 _stream_text: dict[str, str] = {}
 
+# 增量推送通道：task_id → 订阅者队列列表。
+# 生成协程每拿到一个 delta 立刻 put 进所有队列，SSE 端点 get 到即写包，
+# 不再靠「每 0.15s 轮询缓冲区」——轮询会把上游毫秒级的增量合并成
+# 0.15s 一批的块，叠加模型本身就有 0.5s 级的出块间隔，前端表现为
+# 「一整段一整段地跳」，而不是逐字冒出。
+_stream_subscribers: dict[str, list[asyncio.Queue]] = {}
+
+
+def _publish_delta(task_id: str, delta: str):
+    """把新增量推给所有正在订阅该任务的 SSE 连接（非阻塞，满队列则丢弃由轮询兜底）。"""
+    for q in list(_stream_subscribers.get(task_id, [])):
+        try:
+            q.put_nowait(delta)
+        except asyncio.QueueFull:
+            pass
+
 
 def _load_tasks():
     """启动时从磁盘加载历史任务记录"""
@@ -388,6 +404,7 @@ async def _release_stream_buffer(task_id: str, delay: float = 3.0):
     if task is not None and task.get("status") not in ("ready", "completed", "failed"):
         return
     _stream_text.pop(task_id, None)
+    _stream_subscribers.pop(task_id, None)
 
 
 async def _run_generation(task_id: str, params: dict):
@@ -438,6 +455,8 @@ async def _run_generation(task_id: str, params: dict):
         # 边生成边推进度（85% 封顶，剩余留给导出）；仅改内存、不逐次落盘
         async for delta in stream:
             _stream_text[task_id] = _stream_text.get(task_id, "") + delta
+            # 立刻广播给订阅中的 SSE 连接，让前端逐字渲染而不是等轮询
+            _publish_delta(task_id, delta)
             task = _tasks.get(task_id)
             if task and task.get("progress", 5) < 85:
                 task["progress"] = task["progress"] + 1
@@ -574,40 +593,69 @@ def get_task(task_id: str):
 
 @app.get("/api/courseware/{task_id}/stream")
 async def stream_progress(task_id: str):
-    """Server-Sent Events：实时推送生成进度 + 正文增量（delta）"""
+    """Server-Sent Events：实时推送生成进度 + 正文增量（delta）
+
+    正文增量走「生成协程立即入队 → 本端点立即出队写包」的事件驱动路径，
+    不再以 0.15s 轮询缓冲区，避免把上游增量合并成一批批的块。
+    进度事件仍按 0.15s 节流轮询（进度本身变化稀疏，无需逐条推送）。
+    """
     async def event_generator():
         last_progress = -1
         cursor = 0  # 已推送的正文长度
-        while True:
-            task = _tasks.get(task_id)
-            if not task:
-                yield f"event: error\ndata: {json.dumps({'message': '任务不存在'})}\n\n"
-                break
+        q: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        _stream_subscribers.setdefault(task_id, []).append(q)
+        try:
+            while True:
+                task = _tasks.get(task_id)
+                if not task:
+                    yield f"event: error\ndata: {json.dumps({'message': '任务不存在'})}\n\n"
+                    break
 
-            # 1. 先推送正文增量，保证「ready」前的内容不丢
-            buf = _stream_text.get(task_id, "")
-            if len(buf) > cursor:
-                chunk = buf[cursor:]
-                cursor = len(buf)
-                yield f"event: delta\ndata: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                # 1. 先把订阅遗漏的部分（连接前的历史增量 / 队列溢出丢失的）补齐
+                buf = _stream_text.get(task_id, "")
+                if len(buf) > cursor:
+                    chunk = buf[cursor:]
+                    cursor = len(buf)
+                    yield f"event: delta\ndata: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
 
-            status = task["status"]
-            terminal = status in ("ready", "completed", "failed")
-            if task["progress"] != last_progress or terminal:
-                data = json.dumps({
-                    "status": status,
-                    "progress": task["progress"],
-                    "stage": task["stage"],
-                    "filename": task.get("filename"),
-                    "error": task.get("error"),
-                }, ensure_ascii=False)
-                yield f"event: progress\ndata: {data}\n\n"
-                last_progress = task["progress"]
+                # 2. 等待下一个增量；最多等 0.15s 以便顺带刷新进度 / 发现终态
+                try:
+                    delta = await asyncio.wait_for(q.get(), timeout=0.15)
+                except asyncio.TimeoutError:
+                    delta = None
 
-            if terminal:
-                break
+                if delta:
+                    # 与缓冲区去做差集，确保同一段文字不会被推两遍
+                    buf = _stream_text.get(task_id, "")
+                    if len(buf) > cursor:
+                        chunk = buf[cursor:]
+                        cursor = len(buf)
+                        yield f"event: delta\ndata: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
 
-            await asyncio.sleep(0.15)
+                task = _tasks.get(task_id)
+                if not task:
+                    break
+                status = task["status"]
+                terminal = status in ("ready", "completed", "failed")
+                if task["progress"] != last_progress or terminal:
+                    data = json.dumps({
+                        "status": status,
+                        "progress": task["progress"],
+                        "stage": task["stage"],
+                        "filename": task.get("filename"),
+                        "error": task.get("error"),
+                    }, ensure_ascii=False)
+                    yield f"event: progress\ndata: {data}\n\n"
+                    last_progress = task["progress"]
+
+                if terminal:
+                    break
+        finally:
+            subs = _stream_subscribers.get(task_id)
+            if subs and q in subs:
+                subs.remove(q)
+            if subs is not None and not subs:
+                _stream_subscribers.pop(task_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -739,6 +787,7 @@ def delete_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     _stream_text.pop(task_id, None)
+    _stream_subscribers.pop(task_id, None)
     # 清理文件
     fp = task.get("filepath")
     if fp and os.path.exists(fp):
