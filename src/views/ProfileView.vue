@@ -21,9 +21,6 @@ const userInfo = reactive({
   name: userStore.getName() || "测试用户",
   avatar: userStore.getAvatar(),
   email: "user@example.com",
-  isVerified: false,
-  realName: "",
-  idCard: "",
   birthday: "",
   qq: "",
   wechat: "",
@@ -57,7 +54,6 @@ const menuItems = [
   { id: "profile", label: "个人资料" },
   { id: "usage", label: "使用记录" },
   { id: "favorites", label: "我的收藏" },
-  { id: "verify", label: "实名认证" },
   { id: "posts", label: "发布想法" },
   { id: "settings", label: "账号设置" },
 ];
@@ -1369,16 +1365,6 @@ function cancelEditName() {
   isEditingName.value = false;
 }
 
-// 提交实名认证
-function submitVerification() {
-  if (userInfo.realName && userInfo.idCard) {
-    userInfo.isVerified = true;
-    alert("实名认证提交成功！");
-  } else {
-    alert("请填写完整信息");
-  }
-}
-
 // 文件上传
 function handleFileUpload(event) {
   const files = Array.from(event.target.files);
@@ -1474,9 +1460,6 @@ onUnmounted(() => {
           </div>
           <h3 class="user-card__name">{{ userInfo.name }}</h3>
           <p class="user-card__email">{{ userInfo.email }}</p>
-          <span v-if="userInfo.isVerified" class="verified-badge"
-            >✓ 已认证</span
-          >
         </div>
 
         <nav class="profile-menu">
@@ -1531,20 +1514,6 @@ onUnmounted(() => {
                 <polygon
                   points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
                 />
-              </svg>
-              <svg
-                v-if="item.id === 'verify'"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                <polyline points="9 12 11 14 15 10" />
               </svg>
               <svg
                 v-if="item.id === 'posts'"
@@ -2232,100 +2201,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 实名认证 -->
-        <div v-if="activeMenu === 'verify'" class="content-panel">
-          <h2 class="panel-title">实名认证</h2>
-
-          <div v-if="userInfo.isVerified" class="verify-success">
-            <div class="success-icon">✓</div>
-            <h3>已完成实名认证</h3>
-            <p>您的身份信息已通过验证</p>
-          </div>
-
-          <div v-else class="verify-form">
-            <div class="form-section">
-              <label class="form-label">真实姓名</label>
-              <input
-                v-model="userInfo.realName"
-                type="text"
-                class="form-input"
-                placeholder="请输入您的真实姓名"
-              />
-            </div>
-
-            <div class="form-section">
-              <label class="form-label">身份证号</label>
-              <input
-                v-model="userInfo.idCard"
-                type="text"
-                class="form-input"
-                placeholder="请输入您的身份证号"
-                maxlength="18"
-              />
-            </div>
-
-            <div class="form-section">
-              <label class="form-label">身份证正面照</label>
-              <div class="idcard-upload">
-                <div class="upload-placeholder">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <rect
-                      x="3"
-                      y="3"
-                      width="18"
-                      height="18"
-                      rx="2"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    />
-                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
-                    <path
-                      d="M21 15l-5-5L5 21"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                  <span>点击上传身份证正面</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-section">
-              <label class="form-label">身份证反面照</label>
-              <div class="idcard-upload">
-                <div class="upload-placeholder">
-                  <svg viewBox="0 0 24 24" fill="none">
-                    <rect
-                      x="3"
-                      y="3"
-                      width="18"
-                      height="18"
-                      rx="2"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    />
-                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
-                    <path
-                      d="M21 15l-5-5L5 21"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                  <span>点击上传身份证反面</span>
-                </div>
-              </div>
-            </div>
-
-            <button class="btn-primary" @click="submitVerification">
-              提交认证
-            </button>
-          </div>
-        </div>
-
         <!-- 发布想法 -->
         <div v-if="activeMenu === 'posts'" class="content-panel">
           <h2 class="panel-title">发布想法</h2>
@@ -2545,18 +2420,6 @@ onUnmounted(() => {
   font-size: 0.875rem;
   color: #64748b;
   margin-bottom: 12px;
-}
-
-.verified-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  background: #dcfce7;
-  color: #16a34a;
-  font-size: 0.75rem;
-  font-weight: 600;
-  border-radius: 999px;
 }
 
 .profile-menu {
@@ -2860,83 +2723,6 @@ onUnmounted(() => {
 
 .btn-cancel:hover {
   background: #e5e7eb;
-}
-
-/* 实名认证 */
-.verify-success {
-  text-align: center;
-  padding: 48px;
-}
-
-.success-icon {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
-  background: #dcfce7;
-  color: #16a34a;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2.5rem;
-  margin: 0 auto 24px;
-}
-
-.verify-success h3 {
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: #0f172a;
-  margin-bottom: 8px;
-}
-
-.verify-success p {
-  color: #64748b;
-}
-
-.verify-form {
-  max-width: 480px;
-}
-
-.idcard-upload {
-  border: 2px dashed #e2e8f0;
-  border-radius: 12px;
-  padding: 32px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.idcard-upload:hover {
-  border-color: #2563eb;
-  background: rgba(0, 144, 255, 0.02);
-}
-
-.upload-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: #94a3b8;
-}
-
-.upload-placeholder svg {
-  width: 48px;
-  height: 48px;
-}
-
-.btn-primary {
-  width: 100%;
-  padding: 12px 24px;
-  background: #2563eb;
-  color: white;
-  border: none;
-  border-radius: 10px;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-primary:hover {
-  background: #1d4ed8;
 }
 
 /* 使用记录 */
