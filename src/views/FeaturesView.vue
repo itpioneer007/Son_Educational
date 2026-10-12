@@ -18,6 +18,7 @@ import {
   getCoursewareHistory as fetchApiHistory,
   deleteCoursewareTask as deleteApiTask,
 } from "../composables/useCoursewareApi.js";
+import { useFeedback } from "../composables/useFeedback.js";
 import ContentRevisePanel from "../components/ContentRevisePanel.vue";
 import FormWizard from "../components/FormWizard.vue";
 import TemplateMarket from "../components/TemplateMarket.vue";
@@ -35,6 +36,15 @@ const {
   TYPE_LABELS,
   STATUS_LABELS,
 } = useFeatures();
+
+// 教学反思的反馈库（本地存储）：提交新反馈 / 历史反馈记录 / 全部记录弹窗共用同一份数据
+const {
+  feedbackList,
+  addFeedback,
+  removeFeedback,
+  FEEDBACK_TYPE_LABELS,
+  FEEDBACK_STATUS_LABELS,
+} = useFeedback();
 
 const activePanel = ref("overview");
 const sidebarOpen = ref(false);
@@ -1970,57 +1980,21 @@ const archivePageNumbers = computed(() => {
   return [...new Set(pages)];
 });
 
-// 筛选后的意见反馈列表
-const feedbackItems = computed(() => {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-  return history.value
-    .filter((item) => item.status === "iterating" || item.status === "draft")
-    .filter((item) => {
-      if (
-        feedbackFilters.value.subject &&
-        item.subject !== feedbackFilters.value.subject
-      )
-        return false;
-      if (
-        feedbackFilters.value.type &&
-        item.type !== feedbackFilters.value.type
-      )
-        return false;
-      if (feedbackFilters.value.timeRange) {
-        const itemDate = new Date(item.createdAt);
-        switch (feedbackFilters.value.timeRange) {
-          case "today":
-            if (itemDate < today) return false;
-            break;
-          case "week":
-            if (itemDate < weekAgo) return false;
-            break;
-          case "month":
-            if (itemDate < monthAgo) return false;
-            break;
-        }
-      }
-      if (feedbackFilters.value.searchQuery) {
-        const query = feedbackFilters.value.searchQuery.toLowerCase();
-        const matchTitle = item.title?.toLowerCase().includes(query);
-        const matchSubject = item.subject?.toLowerCase().includes(query);
-        if (!matchTitle && !matchSubject) return false;
-      }
-      return true;
-    })
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .map((item) => ({
-      ...item,
-      typeLabel: TYPE_LABELS[item.type],
-      statusLabel: STATUS_LABELS[item.status],
-      timeLabel: formatFeatureTime(item.createdAt),
-      feedback: iterateFeedback.value[item.id] || "",
-    }));
-});
+// 教学反思的「历史反馈记录」——数据来自 useFeedback 的本地反馈库。
+// 早先这里读的是生成任务历史（status 为 draft / iterating 的课件、教案），
+// 既不是用户提交的反馈，type 也与表单里的反馈类型对不上号，
+// 于是「提交反馈」除了弹一句 toast 之外什么都不会发生。
+const feedbackItems = computed(() =>
+  feedbackList.value.map((item) => ({
+    ...item,
+    typeLabel: FEEDBACK_TYPE_LABELS[item.type] || "其他",
+    statusLabel: FEEDBACK_STATUS_LABELS[item.status] || "待处理",
+    timeLabel: formatFeatureTime(item.createdAt),
+    fullTimeLabel: new Date(item.createdAt).toLocaleString("zh-CN", {
+      hour12: false,
+    }),
+  })),
+);
 
 // 意见反馈统计
 const feedbackStats = computed(() => {
@@ -3312,6 +3286,17 @@ function submitNewFeedback() {
   if (!feedbackType.value) return showToast("请选择反馈类型");
   if (!feedbackTitle.value?.trim()) return showToast("请填写反馈标题");
   if (!feedbackDesc.value?.trim()) return showToast("请填写详细描述");
+
+  // 真正落盘：写入本地反馈库 —— 右侧「历史反馈记录」与「全部记录」弹窗
+  // 读的都是这一份数据，提交后立即出现，刷新页面也不会丢。
+  addFeedback({
+    type: feedbackType.value,
+    title: feedbackTitle.value,
+    content: feedbackDesc.value,
+    contact: feedbackContact.value,
+    fileName: feedbackFileName.value,
+  });
+
   const contactInfo = feedbackContact.value?.trim()
     ? `（联系方式：${feedbackContact.value}）`
     : "";
@@ -5921,10 +5906,10 @@ onUnmounted(() => {
                 >
                   <div class="reflect-history-item__head">
                     <div class="reflect-history-item__tags">
-                      <span class="rh-type" :class="item.type">{{
-                        item.typeLabel
-                      }}</span>
-                      <span class="rh-subject">{{ item.subject }}</span>
+                      <span class="rh-type">{{ item.typeLabel }}</span>
+                      <span v-if="item.fileName" class="rh-subject"
+                        >附件：{{ item.fileName }}</span
+                      >
                     </div>
                     <span class="rh-status" :data-status="item.status">{{
                       item.statusLabel
@@ -5934,7 +5919,7 @@ onUnmounted(() => {
                     {{ item.title }}
                   </div>
                   <div class="reflect-history-item__preview">
-                    {{ item.contentPreview || item.feedback || "暂无反馈内容" }}
+                    {{ item.content || "暂无反馈内容" }}
                   </div>
                   <div class="reflect-history-item__time">
                     <svg
