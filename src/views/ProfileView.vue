@@ -338,8 +338,21 @@ function generateTrendChartOption() {
 
         if (detail) {
           html += `<div style="border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 8px; font-size: 12px; color: #64748b;">`;
-          html += `<div>📚 ${detail.subjects.join("、")}</div>`;
-          html += `<div>⏰ 高峰 ${detail.peakHour}</div>`;
+          const icoBook =
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" '
+            + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            + 'style="vertical-align:-2px;margin-right:5px">'
+            + '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
+            + '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'
+            + '</svg>';
+          const icoClock =
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" '
+            + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+            + 'style="vertical-align:-2px;margin-right:5px">'
+            + '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+            + '</svg>';
+          html += `<div>${icoBook}${detail.subjects.join("、")}</div>`;
+          html += `<div>${icoClock}高峰 ${detail.peakHour}</div>`;
           html += `</div>`;
         }
         return html;
@@ -1851,7 +1864,21 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="stat-card stat-card--success">
-              <div class="stat-icon">🔥</div>
+              <div class="stat-icon">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="12" cy="8" r="6" />
+                  <path d="M15.5 13.2 17 22l-5-3-5 3 1.5-8.8" />
+                </svg>
+              </div>
               <div class="stat-info">
                 <div class="stat-value">
                   {{ Math.max(...usageData[usageTimeRange].data) }}
@@ -1860,7 +1887,21 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="stat-card stat-card--info">
-              <div class="stat-icon">📈</div>
+              <div class="stat-icon">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+                  <polyline points="17 6 23 6 23 12" />
+                </svg>
+              </div>
               <div class="stat-info">
                 <div class="stat-value">
                   {{
@@ -1876,7 +1917,21 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="stat-card stat-card--warning">
-              <div class="stat-icon">⏰</div>
+              <div class="stat-icon">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+              </div>
               <div class="stat-info">
                 <div class="stat-value">{{ getPeakHour() }}</div>
                 <div class="stat-label">创作高峰</div>
@@ -2086,7 +2141,24 @@ onUnmounted(() => {
           <!-- 创作建议 -->
           <div class="usage-tips">
             <div class="tip-card">
-              <div class="tip-icon">💡</div>
+              <div class="tip-icon">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M9 18h6" />
+                  <path d="M10 22h4" />
+                  <path
+                    d="M12 2a6 6 0 0 0-3.5 10.9c.5.4.8 1 .8 1.6h5.4c0-.6.3-1.2.8-1.6A6 6 0 0 0 12 2z"
+                  />
+                </svg>
+              </div>
               <div class="tip-content">
                 <h4>创作建议</h4>
                 <p>
@@ -3486,8 +3558,14 @@ onUnmounted(() => {
 }
 
 .stat-icon {
-  font-size: 2rem;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .stat-info {
@@ -4258,20 +4336,27 @@ onUnmounted(() => {
   display: flex;
   gap: 16px;
   padding: 20px 24px;
-  background: linear-gradient(135deg, #667eea08 0%, #764ba208 100%);
-  border: 1px solid #667eea20;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
+  border: 1px solid #d1fae5;
   border-radius: 16px;
   transition: all 0.3s ease;
 }
 
 .tip-card:hover {
-  border-color: #667eea40;
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.1);
+  border-color: #a7f3d0;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.12);
 }
 
 .tip-icon {
-  font-size: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: #ffffff;
+  color: #059669;
 }
 
 .tip-content h4 {
