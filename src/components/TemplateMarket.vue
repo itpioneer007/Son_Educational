@@ -206,7 +206,6 @@ watch(open, (v) => {
           />
           自动配图
         </label>
-        <span class="mk__option-hint">开启备注与配图会消耗更多讯飞额度</span>
       </div>
     </div>
 
@@ -518,11 +517,6 @@ watch(open, (v) => {
   font-size: 0.78rem;
   color: var(--ink-soft);
   cursor: pointer;
-}
-
-.mk__option-hint {
-  font-size: 0.7rem;
-  color: var(--ink-muted);
 }
 
 /* ── 弹层 ───────────────────────────────────── */
