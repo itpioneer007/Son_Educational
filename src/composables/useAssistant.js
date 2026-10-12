@@ -212,12 +212,33 @@ export function useAssistant() {
     return session;
   }
 
-  function updateSession(session) {
+  // 流式期间每个 token 都会调用 updateSession，而 persistSessions 会
+  // JSON.stringify 整个会话数组并同步写入 localStorage。
+  // 实测单条回答 924 个增量 → 924 次同步写盘，纯属开销且会持续占用主线程。
+  // 流式阶段改为节流落盘（保证最终态一定落盘），内存态仍然逐帧更新、不影响渲染。
+  let persistTimer = null;
+  function schedulePersist() {
+    if (persistTimer) return;
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      persistSessions();
+    }, 500);
+  }
+  function flushPersist() {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    persistSessions();
+  }
+
+  function updateSession(session, opts = {}) {
     const idx = state.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
       session.updatedAt = Date.now();
       state.sessions[idx] = session;
-      persistSessions();
+      if (opts.throttle) schedulePersist();
+      else flushPersist();
     }
   }
 
@@ -285,7 +306,7 @@ export function useAssistant() {
     try {
       const reply = await sendToTongyi(history, options, (full) => {
         aiMsg.content = full;
-        updateSession(session);
+        updateSession(session, { throttle: true });
         if (typeof options.onDelta === "function") options.onDelta(full);
       });
       aiMsg.content = reply;
