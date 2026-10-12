@@ -39,17 +39,46 @@ function titleFromMessage(text) {
 
 /**
  * 流式调用后端 Qwen 接口，逐段读取 SSE 返回。
+ *
+ * 超时采用「两段预算」而不是单一总时长：模型首 token 延迟与总时长都可能非常长
+ * （实测 Qwen 首 token 可达 125s、单条回答总时长 178s），若用「从请求发起起算的
+ * 总时长」做上限，健康的长回答会在写到一半时被中途掐断 —— 用户看到的就是
+ * 「明明已经在输出内容，过一会儿突然全没了，还报超时」。
+ * 因此改为：
+ *   - 首字预算：等待第一个字期间给足 300s（上游排队/冷启可能很慢）；
+ *   - 静默预算：首字到达后，只要 60s 内还有新内容就不断续期，
+ *     只有真的「卡住不说话」才判定超时。
+ * 每次拿到内容都重新计时，健康的慢流永远不会被误杀。
+ *
  * @param {Array} messages 多轮对话历史 [{role, content}]
  * @param {object} options { profile, onDelta }
  * @param {Function} onDelta 每收到一段内容时回调（参数为累积的完整文本）
  * @returns {Promise<string>} 累积的完整回复文本
  */
 export async function sendToTongyi(messages, options = {}, onDelta) {
-  // 整体超时保护：防止后端/AI 挂起导致 isLoading 永久卡死
   const controller = new AbortController();
-  // 长回答（如完整教案式长文）可能接近 90 秒，超时设 180s 兜底（仅防真正卡死）
-  const TIMEOUT_MS = 180000;
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const FIRST_TOKEN_MS = 300000; // 首字预算：5 分钟
+  const IDLE_MS = 60000; // 静默预算：首字之后连续 60s 无新内容才算挂死
+
+  let timer = null;
+  // 重新计时；每收到一段内容就调用一次，把「总时长上限」变成「静默时长上限」
+  const arm = (ms) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), ms);
+  };
+  const disarm = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+  arm(FIRST_TOKEN_MS);
+
+  // 超时错误带上已产出的部分正文：上层据此保留内容，而不是整段清空
+  const timeoutError = (partial) => {
+    const e = new Error("AI 服务响应超时，请稍后重试");
+    e.partial = partial;
+    e.isTimeout = true;
+    return e;
+  };
 
   let res;
   try {
@@ -63,14 +92,12 @@ export async function sendToTongyi(messages, options = {}, onDelta) {
       signal: controller.signal,
     });
   } catch (e) {
-    clearTimeout(timer);
-    if (e.name === "AbortError") {
-      throw new Error("AI 服务响应超时，请稍后重试");
-    }
+    disarm();
+    if (e.name === "AbortError") throw timeoutError("");
     throw new Error("无法连接 AI 服务，请确认后端已启动");
   }
   if (!res.ok || !res.body) {
-    clearTimeout(timer);
+    disarm();
     throw new Error(`AI 服务返回错误（HTTP ${res.status}）`);
   }
 
@@ -79,44 +106,57 @@ export async function sendToTongyi(messages, options = {}, onDelta) {
   let full = "";
   let buffer = "";
 
-  while (true) {
-    let chunk;
-    try {
-      chunk = await reader.read();
-    } catch (e) {
-      clearTimeout(timer);
-      if (e.name === "AbortError") {
-        throw new Error("AI 服务响应超时，请稍后重试");
-      }
-      throw e;
-    }
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, { stream: true });
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
 
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const rawEvent = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      for (const line of rawEvent.split("\n")) {
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") continue;
-        try {
-          const data = JSON.parse(payload);
+      let idx;
+      let done = false;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const rawEvent = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 2);
+        for (const line of rawEvent.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") {
+            done = true;
+            break;
+          }
+          // 先单独完成 JSON 解析：解析失败只跳过该片段，
+          // 不能和后端明确返回的 error 混在一起被忽略。
+          let data;
+          try {
+            data = JSON.parse(payload);
+          } catch {
+            continue; // 无法解析的片段，等待完整事件
+          }
           if (typeof data.content === "string") {
             full += data.content;
+            // 首字一到达即从「首字预算」切到「静默预算」，此后每来一段都续期
+            arm(IDLE_MS);
             if (onDelta) onDelta(full);
           } else if (data.error) {
-            throw new Error(data.error);
+            // 后端明确报错：把已产出的部分一起带出去，避免用户丢掉半截回答
+            const e = new Error(data.error);
+            e.partial = full;
+            throw e;
           }
-        } catch (err) {
-          if (err.message && err.message.includes("AI 服务")) throw err;
-          // 忽略无法解析的片段，等待完整事件
         }
+        if (done) break;
       }
+      if (done) break;
     }
+    disarm();
+  } catch (e) {
+    disarm();
+    if (e.name === "AbortError") throw timeoutError(full);
+    // 后端 error / 网络中断：同样保留已产出的内容
+    if (e.partial === undefined) e.partial = full;
+    throw e;
   }
-  clearTimeout(timer);
+
   if (!full) throw new Error("AI 服务未返回内容，请稍后重试");
   return full;
 }
@@ -236,8 +276,14 @@ export function useAssistant() {
     session.messages.push(aiMsg);
     updateSession(session);
 
+    // 送给模型的历史要剔除「刚插入、内容还是空的」这条 assistant 占位消息，
+    // 否则会把一个空的 assistant turn 也发给模型。
+    const history = session.messages
+      .filter((m) => !(m.role === "assistant" && !m.content))
+      .map((m) => ({ role: m.role, content: m.content }));
+
     try {
-      const reply = await sendToTongyi(session.messages, options, (full) => {
+      const reply = await sendToTongyi(history, options, (full) => {
         aiMsg.content = full;
         updateSession(session);
         if (typeof options.onDelta === "function") options.onDelta(full);
@@ -245,8 +291,21 @@ export function useAssistant() {
       aiMsg.content = reply;
       updateSession(session);
     } catch (err) {
-      aiMsg.content = "";
-      aiMsg.error = err.message || "AI 服务调用失败";
+      // 关键：超时/中断都不代表已生成的内容无效。
+      // 先前这里无条件 `aiMsg.content = ""`，会把用户已经看到的半截回答整段抹掉，
+      // 表现为「明明在输出，突然全没了」。
+      // 现在保留已产出部分，仅补充一条中断说明；完全没产出时才算失败。
+      const partial = err.partial || aiMsg.content || "";
+      if (partial) {
+        aiMsg.content = partial;
+        aiMsg.interrupted = true;
+        aiMsg.error = err.isTimeout
+          ? "回答未完成（服务超时），以上为已生成内容"
+          : `回答未完成：${err.message || "连接中断"}`;
+      } else {
+        aiMsg.content = "";
+        aiMsg.error = err.message || "AI 服务调用失败";
+      }
       updateSession(session);
     }
 

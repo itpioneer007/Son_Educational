@@ -494,8 +494,13 @@ async def chat_with_qwen_stream(
     if profile_prompt:
         system_prompt += "\n\n" + profile_prompt
 
-    # 流式接口必须设置超时，否则 Qwen 挂起时前端会无限等待（表现为"点击没反应"）
-    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
+    # 流式接口必须设置超时，否则 Qwen 挂起时前端会无限等待（表现为"点击没反应"）。
+    # read 超时是「单次读取」的上限（每收到一块就重新计时），不是整体时长上限，
+    # 因此可以给足：实测首 token 延迟可达 125s，若沿用默认 180s 会很接近边界，
+    # 上游一排队就触发 ReadTimeout、整条回答作废。这里放宽到 300s。
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=15.0, read=300.0, write=30.0, pool=15.0)
+    ) as client:
         async with client.stream(
             "POST",
             f"{QWEN_BASE_URL}/chat/completions",

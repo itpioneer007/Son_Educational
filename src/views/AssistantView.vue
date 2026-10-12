@@ -663,7 +663,10 @@ watch(activeId, scrollToBottom);
               :class="{
                 'message__bubble--typing':
                   msg.role === 'assistant' && !msg.content && !msg.error,
-                'message__bubble--error': msg.role === 'assistant' && msg.error,
+                'message__bubble--error':
+                  msg.role === 'assistant' && msg.error && !msg.content,
+                'message__bubble--interrupted':
+                  msg.role === 'assistant' && msg.interrupted,
               }"
             >
               <div
@@ -671,10 +674,19 @@ watch(activeId, scrollToBottom);
                 class="markdown-body"
                 v-html="renderMarkdown(msg.content)"
               ></div>
-              <div v-else-if="msg.error" class="message__error-text">
+              <!-- 中断说明必须独立成块：先前用 v-else-if 挂在正文后面，
+                   一旦保留了已生成的正文，报错就永远显示不出来。
+                   现在正文与说明可以并存。 -->
+              <div
+                v-if="msg.error"
+                class="message__error-text"
+                :class="{ 'is-note': !!msg.content }"
+              >
                 {{ msg.error }}
               </div>
-              <template v-else><span /><span /><span /></template>
+              <template v-if="!msg.content && !msg.error"
+                ><span /><span /><span
+              /></template>
             </div>
 
             <div
@@ -1572,6 +1584,18 @@ watch(activeId, scrollToBottom);
   font-size: 0.82rem;
   color: #dc2626;
   line-height: 1.6;
+}
+
+/* 正文保留、只是被中断时的说明条：与正文分隔开，但仍保持警示色 */
+.message__error-text.is-note {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed rgba(220, 38, 38, 0.35);
+}
+
+/* 中断气泡：左侧一条细警示线，明确「这条回答没写完」 */
+.message__bubble--interrupted {
+  border-left: 3px solid rgba(220, 38, 38, 0.45);
 }
 
 /* ──── AI 回复 Markdown 结构化样式 ────
