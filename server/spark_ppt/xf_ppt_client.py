@@ -149,15 +149,19 @@ def _normalize_templates(data) -> list:
 # 模板列表缓存：上游按页拉取耗时明显，进程内缓存一段时间，避免每次进市场都重拉
 _TEMPLATE_CACHE: dict = {}
 _TEMPLATE_CACHE_TTL = 30 * 60  # 秒
-_TEMPLATE_PAGE_SIZE = 50       # 每页条数（上游上限）
-_TEMPLATE_MAX_PAGES = 2        # 抓取前 2 页，约 100 个模板
+# 单页条数上限。实测上游对 pageSize 相当宽松，725 套模板一次 pageSize=800 即可全量返回；
+# 这里取 500 作为「单页可靠上限」，超过的部分按页补抓。
+_TEMPLATE_PAGE_SIZE = 500
+# 兜底翻页上限：正常一次请求就够，这条只在 total 异常巨大时防止无限翻页。
+_TEMPLATE_MAX_PAGES = 20
 
 # 讯飞模板接口的正确用法：分页参数必须放在 JSON Body 里（放 query string 会被忽略，
 # 导致每次只返回固定的一批）。用 body 传 pageNum/pageSize 才能翻页取到更多模板。
-def _fetch_template_page(app_id: str, api_secret: str, pay_type: str, page_num: int) -> dict:
+def _fetch_template_page(app_id: str, api_secret: str, pay_type: str, page_num: int,
+                         page_size: int = _TEMPLATE_PAGE_SIZE) -> dict:
     resp = requests.post(
         f"{_API_BASE}/template/list",
-        json={"payType": pay_type, "pageNum": page_num, "pageSize": _TEMPLATE_PAGE_SIZE},
+        json={"payType": pay_type, "pageNum": page_num, "pageSize": page_size},
         headers=_headers(app_id, api_secret),
         timeout=30,
     )
@@ -171,29 +175,50 @@ def _fetch_template_page(app_id: str, api_secret: str, pay_type: str, page_num: 
 
 
 def get_templates(pay_type: str = "not_free") -> dict:
-    """查询讯飞 PPT 模板列表（分页抓取 + 去重 + 进程内缓存）。
+    """查询讯飞 PPT 模板列表（全量抓取 + 去重 + 进程内缓存）。
 
-    返回 {"total": 真实条数, "templates": [{id, name, preview, style, color, industry}]}
+    旧实现固定抓前 2 页 × 50 条，上游实际有 700+ 套模板，市场里只能看到约 1/7。
+    改为「先探总数、再一次性拉全」：第一页用大 pageSize 请求，从响应里取 total，
+    再补齐剩余页，确保不因条数增长而漏模板。
+
+    返回 {"total": 上游真实总数, "templates": [...]}
+    —— total 取上游口径（而非去重后的本地条数），市场据此展示「共 N 套」。
     """
     cached = _TEMPLATE_CACHE.get(pay_type)
     if cached and time.time() - cached["ts"] < _TEMPLATE_CACHE_TTL:
-        return {"total": len(cached["templates"]), "templates": cached["templates"]}
+        return {"total": cached["total"], "templates": cached["templates"]}
 
     cfg = _load_config()
     if not cfg.APP_ID or not cfg.API_SECRET:
         raise RuntimeError("未配置讯飞凭据，无法查询模板列表")
 
     unique, seen = [], set()
-    for page_num in range(1, _TEMPLATE_MAX_PAGES + 1):
-        data = _fetch_template_page(cfg.APP_ID, cfg.API_SECRET, pay_type, page_num)
+
+    def _absorb(data) -> None:
         for t in _normalize_templates(data):
             if t["id"] in seen:
                 continue
             seen.add(t["id"])
             unique.append(t)
 
-    _TEMPLATE_CACHE[pay_type] = {"ts": time.time(), "templates": unique}
-    return {"total": len(unique), "templates": unique}
+    # 第 1 页：顺便取 total，决定是否还需要补页
+    data = _fetch_template_page(cfg.APP_ID, cfg.API_SECRET, pay_type, 1)
+    _absorb(data)
+    upstream_total = int((data or {}).get("total") or 0) if isinstance(data, dict) else 0
+    total_pages = min(
+        (upstream_total + _TEMPLATE_PAGE_SIZE - 1) // _TEMPLATE_PAGE_SIZE,
+        _TEMPLATE_MAX_PAGES,
+    )
+
+    for page_num in range(2, total_pages + 1):
+        _absorb(_fetch_template_page(cfg.APP_ID, cfg.API_SECRET, pay_type, page_num))
+
+    _TEMPLATE_CACHE[pay_type] = {
+        "ts": time.time(),
+        "templates": unique,
+        "total": upstream_total or len(unique),
+    }
+    return {"total": upstream_total or len(unique), "templates": unique}
 
 
 # ════════════════════════════════════════════════════════════════
