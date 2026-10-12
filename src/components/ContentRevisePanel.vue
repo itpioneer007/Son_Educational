@@ -139,9 +139,15 @@ watch(contentLength, async () => {
             <path d="M5 20c0-3.4 3.1-5.6 7-5.6s7 2.2 7 5.6" />
           </svg>
         </span>
-        <!-- AI 生成的正文以 Markdown 形式实时展示，可滚动阅读 -->
+        <!-- 流式阶段用纯文本逐字呈现（Markdown 语法原样显示，等定稿再一次性解析），
+             定稿后切换为渲染好的 HTML —— 避免每来一个 delta 就重跑整篇 marked.parse
+             （长文时是 O(n²)，是「一整段一整段往外跳」的主因）。 -->
         <div
-          v-if="m.role === 'assistant' && m.content"
+          v-if="m.role === 'assistant' && m.content && m.streaming"
+          class="revise__bubble revise__md is-streaming"
+        ><span class="revise__cursor" aria-hidden="true"></span>{{ m.content }}</div>
+        <div
+          v-else-if="m.role === 'assistant' && m.content"
           class="revise__bubble revise__md"
           v-html="renderMd(m.content)"
         ></div>
@@ -375,6 +381,35 @@ watch(contentLength, async () => {
 
 .revise__md :deep(h1:first-child) {
   margin-top: 0;
+}
+
+/* 流式阶段：正文以纯文本原样呈现，保留换行；块级布局与定稿后一致，切换无跳动 */
+.revise__md.is-streaming {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 打字机光标：一个贴在行尾闪烁的竖条，给出「正在输出」的活性反馈 */
+.revise__cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-right: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent-deep);
+  animation: revise-blink 1s steps(2, start) infinite;
+}
+
+@keyframes revise-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .revise__cursor {
+    animation: none;
+  }
 }
 
 .revise__working {
