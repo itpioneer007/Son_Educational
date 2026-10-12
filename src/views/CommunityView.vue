@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from "vue";
 import PostCard from "../components/community/PostCard.vue";
 import SiteNav from "../components/layout/SiteNav.vue";
 import { useCommunity } from "../composables/useCommunity.js";
+import { useUserStore } from "../stores/userStore.js";
 import {
   dateKey,
   seededInt,
@@ -11,6 +12,7 @@ import {
 } from "../utils/demoData.js";
 
 const { getPosts, addPost } = useCommunity();
+const userStore = useUserStore();
 
 const filter = ref("all");
 const expandedId = ref(null);
@@ -21,11 +23,12 @@ const showForm = ref(false);
 const searchQuery = ref("");
 const hotSearches = ["翻转课堂", "新课导入", "物理交互动画", "课堂管理"];
 
+// 昵称默认取「个人中心」里的当前用户，用户仍可临时改写
 const newPost = ref({
   tag: "教学讨论",
   title: "",
   content: "",
-  author: "匿名老师",
+  author: userStore.getName() || "匿名老师",
 });
 
 const tags = ["教学讨论", "课件结构", "互动设计", "课堂管理", "备课技巧"];

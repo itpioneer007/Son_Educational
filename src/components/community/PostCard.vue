@@ -89,7 +89,6 @@ function submitComment() {
   commentText.value = "";
   emit("action", "comment");
 }
-
 function handleCommentLike(commentId) {
   toggleCommentLike(commentId);
 }
@@ -279,7 +278,7 @@ function commentAvatarColor(author) {
             >
             <div class="post-card__comment-content">
               <strong>{{ c.author || "匿名" }}</strong>
-              <p>{{ c.text }}</p>
+              <p>{{ c.content || c.text }}</p>
             </div>
             <button
               class="comment-like"

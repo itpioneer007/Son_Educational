@@ -1,7 +1,15 @@
 import { reactive } from 'vue'
 import { storageKey } from '../config/storage.js'
+import { useUserStore } from '../stores/userStore.js'
 
 const STORAGE_KEY = storageKey('community-data')
+
+// 当前登录用户（与「个人中心」共用同一份 profile）——发帖/评论署名用它，
+// 之前硬编码 '匿名老师' 会让每条新内容都署同一个假名，看不出是谁发的。
+function currentAuthor() {
+  const name = useUserStore().getName()
+  return name || '匿名老师'
+}
 
 const VISUAL_PRESETS = {
   教学讨论: {
@@ -493,13 +501,13 @@ export function useCommunity() {
     return true
   }
 
-  function addComment(postId, content, author = '匿名老师') {
+  function addComment(postId, content, author = null) {
     const post = state.posts.find((p) => p.id === postId)
     if (!post || !content.trim()) return null
 
     const comment = {
       id: uid('c'),
-      author,
+      author: author || currentAuthor(),
       content: content.trim(),
       createdAt: Date.now(),
       likes: 0,
@@ -509,7 +517,7 @@ export function useCommunity() {
     return comment
   }
 
-  function addPost({ tag, title, content, author = '匿名老师' }) {
+  function addPost({ tag, title, content, author = null }) {
     if (!title.trim() || !content.trim()) return null
 
     const post = {
@@ -517,7 +525,7 @@ export function useCommunity() {
       tag: tag || '教学讨论',
       title: title.trim(),
       content: content.trim(),
-      author,
+      author: author || currentAuthor(),
       createdAt: Date.now(),
       likes: 0,
       comments: [],
