@@ -244,6 +244,7 @@ async function handleContentExport() {
 // 预览弹窗
 const showPreview = ref(false);
 const previewItem = ref(null);
+const showAllFeedback = ref(false);
 
 const historyQuery = ref("");
 const historyPage = ref(1);
@@ -427,14 +428,6 @@ const knowledgeTags = [
   "历史事件",
   "地理地貌",
 ];
-
-// 意见反馈筛选条件
-const feedbackFilters = ref({
-  subject: "",
-  type: "",
-  timeRange: "",
-  searchQuery: "",
-});
 
 // 可选的学科列表
 const availableSubjects = computed(() => {
@@ -1996,29 +1989,6 @@ const feedbackItems = computed(() =>
   })),
 );
 
-// 意见反馈统计
-const feedbackStats = computed(() => {
-  const items = feedbackItems.value;
-  return {
-    total: items.length,
-    byType: {
-      ppt: items.filter((i) => i.type === "ppt").length,
-      doc: items.filter((i) => i.type === "doc").length,
-      interactive: items.filter((i) => i.type === "interactive").length,
-    },
-  };
-});
-
-// 重置筛选
-function resetFeedbackFilters() {
-  feedbackFilters.value = {
-    subject: "",
-    type: "",
-    timeRange: "",
-    searchQuery: "",
-  };
-}
-
 const intentSupport = [
   "把“教学意图”做成生成流程的前置信息层，而不是单独孤立的工具页。",
   "先明确课堂目标、学生难点和使用场景，再让系统去生成课件、教案和教学题。",
@@ -3311,6 +3281,23 @@ function submitNewFeedback() {
   feedbackFileName.value = "";
   if (fileInputRef.value) fileInputRef.value.value = "";
 }
+
+// 删除某条反馈记录（「全部记录」弹窗内）
+function deleteFeedbackItem(item) {
+  removeFeedback(item.id);
+  showToast(`已删除反馈「${item.title}」`);
+}
+
+// 「全部反馈记录」弹窗支持 Esc 关闭
+function onFeedbackDialogKeydown(e) {
+  if (e.key === "Escape" && showAllFeedback.value) {
+    showAllFeedback.value = false;
+  }
+}
+onMounted(() => window.addEventListener("keydown", onFeedbackDialogKeydown));
+onUnmounted(() =>
+  window.removeEventListener("keydown", onFeedbackDialogKeydown),
+);
 
 // 添加快速提示到反馈
 function addTipToFeedback(itemId, tip) {
@@ -5958,7 +5945,7 @@ onUnmounted(() => {
               </div>
 
               <div class="reflect-history-card__foot">
-                <button class="view-all-btn" @click="resetFeedbackFilters">
+                <button class="view-all-btn" @click="showAllFeedback = true">
                   查看全部记录
                   <svg
                     width="14"
@@ -6055,6 +6042,135 @@ onUnmounted(() => {
               {{
                 previewItem.status === "completed" ? "下载课件" : "导出并下载"
               }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 全部反馈记录弹窗：一次性查看提交过的所有建议 -->
+    <Transition name="modal">
+      <div
+        v-if="showAllFeedback"
+        class="preview-overlay"
+        @click.self="showAllFeedback = false"
+      >
+        <div
+          class="preview-dialog feedback-all"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="feedback-all-title"
+        >
+          <div class="preview-dialog__header">
+            <div class="preview-dialog__icon">
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              </svg>
+            </div>
+            <div>
+              <h3 id="feedback-all-title">全部反馈记录</h3>
+              <span class="preview-dialog__meta"
+                >共 {{ feedbackItems.length }} 条 · 按提交时间倒序</span
+              >
+            </div>
+            <button
+              class="preview-dialog__close"
+              aria-label="关闭"
+              @click="showAllFeedback = false"
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="feedback-all__body">
+            <article
+              v-for="item in feedbackItems"
+              :key="item.id"
+              class="feedback-all__item"
+            >
+              <div class="feedback-all__head">
+                <span class="rh-type">{{ item.typeLabel }}</span>
+                <span class="rh-status" :data-status="item.status">{{
+                  item.statusLabel
+                }}</span>
+                <span class="feedback-all__time">{{ item.fullTimeLabel }}</span>
+                <button
+                  class="feedback-all__del"
+                  aria-label="删除这条反馈"
+                  @click="deleteFeedbackItem(item)"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                  </svg>
+                </button>
+              </div>
+              <h4 class="feedback-all__title">{{ item.title }}</h4>
+              <p class="feedback-all__text">{{ item.content }}</p>
+              <div
+                v-if="item.fileName || item.contact"
+                class="feedback-all__meta"
+              >
+                <span v-if="item.fileName">附件：{{ item.fileName }}</span>
+                <span v-if="item.contact">联系方式：{{ item.contact }}</span>
+              </div>
+            </article>
+
+            <div v-if="!feedbackItems.length" class="reflect-history-empty">
+              <svg
+                width="40"
+                height="40"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <p>暂无反馈记录<br />提交反馈后将在此展示</p>
+            </div>
+          </div>
+
+          <div class="preview-dialog__footer">
+            <button
+              class="preview-btn preview-btn--secondary"
+              @click="showAllFeedback = false"
+            >
+              关闭
             </button>
           </div>
         </div>
@@ -11823,6 +11939,87 @@ onUnmounted(() => {
 .preview-btn--primary:hover {
   box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
   transform: translateY(-1px);
+}
+
+/* 全部反馈记录弹窗：条目按提交时间倒序平铺，正文保留用户填写的换行 */
+.preview-dialog.feedback-all {
+  width: min(640px, 92vw);
+  display: flex;
+  flex-direction: column;
+  max-height: 82vh;
+}
+.feedback-all__body {
+  padding: 16px 24px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.feedback-all__item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+.feedback-all__item:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+.feedback-all__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.feedback-all__time {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.feedback-all__del {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 2px;
+  border-radius: 6px;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.feedback-all__del:hover {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+.feedback-all__title {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+.feedback-all__text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: #475569;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.feedback-all__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.preview-dialog.feedback-all .preview-dialog__footer {
+  border-top: 1px solid #f1f5f9;
 }
 
 /* 弹窗过渡动画 */
