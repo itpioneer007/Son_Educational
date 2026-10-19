@@ -1,6 +1,10 @@
 """
-DeepSeek AI 服务 — 生成课件内容
-API 兼容 OpenAI 格式，价格 ¥1/百万 token (输入), ¥2/百万 (输出)
+内容生成 AI 服务（课件 / 教案 / 练习 / 试卷）
+
+走阿里云百炼 DashScope 的 OpenAI 兼容接口，可在两条通道间切换：
+  - qwen     ：QWEN_API_KEY + qwen3.8-max（默认，实测流式首字约 1s）
+  - deepseek ：DEEPSEEK_API_KEY + deepseek-v4.1-flash（免费额度已耗尽，作备用）
+主通道因额度 / 鉴权失败时自动换另一条通道重试一次。
 """
 
 import json
@@ -9,6 +13,8 @@ import httpx
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
     PPT_MODEL, DOC_MODEL, QUIZ_MODEL, EXAM_MODEL,
+    PPT_PROVIDER, DOC_PROVIDER, QUIZ_PROVIDER, EXAM_PROVIDER,
+    CONTENT_PROVIDER, CONTENT_MODEL, CONTENT_FALLBACK,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL,
 )
 
@@ -164,37 +170,105 @@ EXAM_SYSTEM_PROMPT = """你是一个专业的试卷出题专家，请为教师�
 5. 只输出上述结构，不要额外说明"""
 
 
-async def call_deepseek_stream(system_prompt: str, user_prompt: str, model: str = None):
-    """流式调用内容生成模型，逐段产出文本（Markdown），供前端即时渲染、避免长时间等待。"""
-    if not DEEPSEEK_API_KEY:
-        raise RuntimeError(
-            "⚠️  未设置 DEEPSEEK_API_KEY\n"
-            "请前往 https://platform.deepseek.com/ 注册获取 API Key，"
-            "然后在终端执行:\n"
-            "  $env:DEEPSEEK_API_KEY='sk-你的key'"
+# ── 模型通道 ─────────────────────────────────────────────────────
+# 两条通道 Base URL 相同（都是百炼 DashScope 的 OpenAI 兼容接口），
+# 差别只在「用哪个 Key / 哪个额度池」，所以 Key 一失效就必须换通道而不是换模型名。
+_CHANNELS = {
+    "deepseek": lambda: (DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL),
+    "qwen": lambda: (QWEN_API_KEY, QWEN_BASE_URL, CONTENT_MODEL),
+}
+
+
+class LLMChannelError(RuntimeError):
+    """通道级失败（额度用尽 / 鉴权失败 / 模型未开通）：换另一条通道通常就能继续。"""
+
+
+def _error_detail(raw: str):
+    """从 DashScope 的错误体里取出 (message, code)。"""
+    try:
+        err = json.loads(raw).get("error") or {}
+        return str(err.get("message") or ""), str(err.get("code") or "")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return raw.strip()[:300], ""
+
+
+def _llm_error(status: int, raw: str, provider: str, model: str) -> Exception:
+    """把上游 HTTP 错误翻译成能直接给用户看的中文说明。
+
+    以前这里只有 resp.raise_for_status()，前端拿到的是
+    "Client error '403 Forbidden' for url 'https://dashscope.../chat/completions'"
+    —— 既看不出是额度问题，也看不出该找谁处理。403 FreeTierOnly 是
+    「工作区免费额度用完」的明确信号，这里显式说清并给出处理方式。
+    """
+    message, code = _error_detail(raw)
+    channel = "qwen" if provider == "qwen" else "deepseek"
+    if code == "AllocationQuota.FreeTierOnly" or "Free quota exhausted" in message:
+        return LLMChannelError(
+            f"内容生成额度已用尽（{model}）：{channel} 通道所在阿里云百炼工作区的免费额度"
+            "已用完。请到百炼控制台为该工作区充值，或关闭「仅使用免费额度」开关后重试。"
+        )
+    if status in (401, 403):
+        return LLMChannelError(
+            f"无权访问模型 {model}（HTTP {status}）：{message or '鉴权失败'}。"
+            "请检查 Key 是否有效、该模型是否已开通。"
+        )
+    if status == 404 or code == "model_not_found":
+        return LLMChannelError(
+            f"模型 {model} 不存在或未开通（HTTP {status}）：{message or 'model not exist'}。"
+        )
+    if status == 429:
+        return LLMChannelError(
+            f"模型 {model} 请求过于频繁或超出配额（HTTP 429）：{message or 'rate limited'}。"
+        )
+    # 400 之类是请求本身的问题，换通道也没用，直接当普通错误
+    return RuntimeError(f"模型 {model} 调用失败（HTTP {status}）：{message or raw[:200]}")
+
+
+async def _stream_once(
+    provider: str, system_prompt: str, user_prompt: str, model: str,
+):
+    """在指定通道上跑一次流式请求；通道级失败抛 LLMChannelError。"""
+    key, base, _ = _CHANNELS[provider]()
+    if not key:
+        env_name = "QWEN_API_KEY" if provider == "qwen" else "DEEPSEEK_API_KEY"
+        raise LLMChannelError(
+            f"未配置 {env_name}，无法调用模型 {model}。"
+            "请在 server/config.local.py 或环境变量中填入该 Key。"
         )
 
-    # 流式接口必须设置超时，否则模型挂起时任务会无限等待
-    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 8192,
+        "stream": True,
+    }
+    if provider == "qwen":
+        # 内容生成不需要思考链：qwen3.8-max 默认开启思考，实测首字 62.5s、整篇 77.5s；
+        # 关掉后首字 0.8s、13.3s 出完（2026-10-19 实测，max_tokens=1024）。
+        # 生成的是结构化课件 Markdown，思考过程对结果没有增益，只制造等待。
+        payload["enable_thinking"] = False
+
+    # 流式接口必须设置超时，否则模型挂起时任务会无限等待。
+    # read 是「单次读取」上限（每收到一块重新计时），不是整体时长上限。
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=15.0, read=300.0, write=30.0, pool=15.0)
+    ) as client:
         async with client.stream(
             "POST",
-            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            f"{base}/chat/completions",
             headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model or DEEPSEEK_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.7,
-                "max_tokens": 8192,
-                "stream": True,
-            },
+            json=payload,
         ) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raw = (await resp.aread()).decode("utf-8", "replace")
+                raise _llm_error(resp.status_code, raw, provider, model)
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue
@@ -208,6 +282,46 @@ async def call_deepseek_stream(system_prompt: str, user_prompt: str, model: str 
                     continue
                 if delta:
                     yield delta
+
+
+async def call_llm_stream(
+    system_prompt: str, user_prompt: str, model: str = None, provider: str = None,
+):
+    """流式调用内容生成模型，逐段产出文本（Markdown），供前端即时渲染。
+
+    主通道因「额度用尽 / 鉴权失败 / 模型未开通 / 连不上」而起不来时，
+    自动换另一条通道重试一次（CONTENT_FALLBACK=off 可关闭）。
+    一旦已经产出内容就不再重试 —— 否则会把前半篇正文重复一遍。
+    """
+    primary = (provider or CONTENT_PROVIDER).lower()
+    if primary not in _CHANNELS:
+        primary = "deepseek"
+    backup = "qwen" if primary == "deepseek" else "deepseek"
+    plan = [primary] if CONTENT_FALLBACK == "off" else [primary, backup]
+
+    for idx, current in enumerate(plan):
+        # 首个通道按角色配置的模型跑；回退通道用它自己的默认模型
+        use_model = model if (idx == 0 and model) else _CHANNELS[current]()[2]
+        produced = False
+        try:
+            async for delta in _stream_once(current, system_prompt, user_prompt, use_model):
+                produced = True
+                yield delta
+            return
+        except LLMChannelError as exc:
+            if produced:
+                raise
+            if idx + 1 < len(plan):
+                print(f"[llm] {current} 通道不可用，自动回退到 {plan[idx + 1]} 通道：{exc}", flush=True)
+                continue
+            raise
+        except httpx.HTTPError as exc:
+            if produced:
+                raise
+            if idx + 1 < len(plan):
+                print(f"[llm] {current} 通道连接失败，回退到 {plan[idx + 1]}：{exc}", flush=True)
+                continue
+            raise RuntimeError(f"模型 {use_model} 连接失败：{exc}") from exc
 
 
 # ── 教案正文后处理（确定性修正，不依赖模型是否听话）────────────────
@@ -286,7 +400,9 @@ async def stream_ppt_content(
 """
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    async for delta in call_deepseek_stream(PPT_SYSTEM_PROMPT, user_prompt, PPT_MODEL):
+    async for delta in call_llm_stream(
+        PPT_SYSTEM_PROMPT, user_prompt, PPT_MODEL, PPT_PROVIDER
+    ):
         yield delta
 
 
@@ -354,8 +470,8 @@ async def stream_doc_content(
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
 
     async def _raw():
-        async for delta in call_deepseek_stream(
-            DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL
+        async for delta in call_llm_stream(
+            DOC_SYSTEM_PROMPT, user_prompt, DOC_MODEL, DOC_PROVIDER
         ):
             yield delta
 
@@ -389,7 +505,9 @@ async def stream_quiz_content(
         user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    async for delta in call_deepseek_stream(QUIZ_SYSTEM_PROMPT, user_prompt, QUIZ_MODEL):
+    async for delta in call_llm_stream(
+        QUIZ_SYSTEM_PROMPT, user_prompt, QUIZ_MODEL, QUIZ_PROVIDER
+    ):
         yield delta
 
 
@@ -423,7 +541,9 @@ async def stream_exam_content(
         user_prompt += f"评估标准：{assessment}（题目须能体现该评估维度）\n"
     if revision:
         user_prompt += f"\n修改意见（在保持整体结构的前提下逐条落实）：\n{revision}\n"
-    async for delta in call_deepseek_stream(EXAM_SYSTEM_PROMPT, user_prompt, EXAM_MODEL):
+    async for delta in call_llm_stream(
+        EXAM_SYSTEM_PROMPT, user_prompt, EXAM_MODEL, EXAM_PROVIDER
+    ):
         yield delta
 
 
@@ -519,7 +639,9 @@ async def chat_with_qwen_stream(
                 "stream": True,
             },
         ) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raw = (await resp.aread()).decode("utf-8", "replace")
+                raise _llm_error(resp.status_code, raw, "qwen", QWEN_MODEL)
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data:"):
                     continue

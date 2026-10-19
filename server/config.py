@@ -45,33 +45,53 @@ def _cred(name: str, default: str = "") -> str:
     return default
 
 
-# AI 配置 —— 内容生成模型（课件 / 教案 / 出题 / 试卷）
-# 统一走阿里云百炼 DashScope 的 deepseek-v4.1-flash（OpenAI 兼容接口）
+# AI 配置 —— 两条调用通道（都是阿里云百炼 DashScope 的 OpenAI 兼容接口）
+# 两条通道 Base URL 相同，区别只在「用哪个 Key / 哪个额度池」：
+#   deepseek：DEEPSEEK_API_KEY + deepseek-v4.1-flash
+#   qwen    ：QWEN_API_KEY + CONTENT_MODEL（默认 qwen3.8-max）
 # 注册获取 Key: https://bailian.console.aliyun.com/
 # ==================================================================
 DEEPSEEK_API_KEY = _cred("DEEPSEEK_API_KEY")
-
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-v4.1-flash"
 
-# ── 四大内容制作角色的独立模型配置 ────────────────────────────────
-# 每个内容制作角色由「特定 LLM 模型」驱动，默认复用上方内容生成模型，
-# 后续可单独将某个角色替换为其他 LLM（改环境变量或下方模型名即可）。
-# 角色对应：PPT_MODEL=课件制作 / DOC_MODEL=教案编写 / QUIZ_MODEL=课堂练习 / EXAM_MODEL=试卷生成
-# ==================================================================
-PPT_MODEL = os.getenv("PPT_MODEL") or DEEPSEEK_MODEL
-DOC_MODEL = os.getenv("DOC_MODEL") or DEEPSEEK_MODEL
-QUIZ_MODEL = os.getenv("QUIZ_MODEL") or DEEPSEEK_MODEL
-EXAM_MODEL = os.getenv("EXAM_MODEL") or DEEPSEEK_MODEL
-
-# Qwen 对话配置 —— 阿里云百炼 DashScope（OpenAI 兼容接口）
-# 用于「知启灵枢 教师 AI 助手」对话；课件/教案/出题/试卷仍走 DeepSeek
-# 注册获取 Key: https://bailian.console.aliyun.com/
-# 凭据读取方式同上：环境变量 > server/config.local.py
-# ==================================================================
+# Qwen 通道 —— 同时用于「内容制作」与「教师 AI 助手对话」
 QWEN_API_KEY = _cred("QWEN_API_KEY")
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_MODEL = os.getenv("QWEN_MODEL") or "qwen3.8-27b"  # 可用 qwen-plus / qwen-max / qwen-turbo 等
+QWEN_MODEL = os.getenv("QWEN_MODEL") or "qwen3.8-27b"  # AI 助手对话用（可用 qwen-plus / qwen-max 等）
+
+# ── 内容制作通道（课件 / 教案 / 出题 / 试卷）──────────────────────
+# 2026-10-19：DEEPSEEK_API_KEY 所在工作区的**免费额度耗尽**，DashScope 直接返回
+#   403 {"code":"AllocationQuota.FreeTierOnly","message":"Free quota exhausted..."}
+# 表现是四个内容制作角色全部生成失败，与代码无关。故默认改走 qwen 通道（实测可用）。
+# 想切回 DeepSeek：CONTENT_PROVIDER=deepseek，或单独 PPT_PROVIDER=deepseek 只切一个角色。
+# 每个角色仍可用 <ROLE>_MODEL 单独钉死模型，例如 PPT_MODEL=qwen3.8-max。
+# ==================================================================
+CONTENT_PROVIDER = (os.getenv("CONTENT_PROVIDER") or "qwen").lower()
+CONTENT_MODEL = os.getenv("CONTENT_MODEL") or "qwen3.8-max"
+# 主通道因「额度 / 鉴权 / 模型未开通」失败时，是否自动换另一条通道重试一次。
+# auto=自动回退，off=不回退（直接报错）。
+CONTENT_FALLBACK = (os.getenv("CONTENT_FALLBACK") or "auto").lower()
+
+
+def _role_provider(role: str) -> str:
+    return (os.getenv(f"{role}_PROVIDER") or CONTENT_PROVIDER).lower()
+
+
+def _role_model(role: str, provider: str) -> str:
+    explicit = os.getenv(f"{role}_MODEL")
+    if explicit:
+        return explicit
+    return CONTENT_MODEL if provider == "qwen" else DEEPSEEK_MODEL
+
+
+# 角色对应：PPT=课件制作 / DOC=教案编写 / QUIZ=课堂练习 / EXAM=试卷生成
+PPT_PROVIDER, DOC_PROVIDER = _role_provider("PPT"), _role_provider("DOC")
+QUIZ_PROVIDER, EXAM_PROVIDER = _role_provider("QUIZ"), _role_provider("EXAM")
+PPT_MODEL = _role_model("PPT", PPT_PROVIDER)
+DOC_MODEL = _role_model("DOC", DOC_PROVIDER)
+QUIZ_MODEL = _role_model("QUIZ", QUIZ_PROVIDER)
+EXAM_MODEL = _role_model("EXAM", EXAM_PROVIDER)
 
 # 服务配置
 HOST = "0.0.0.0"
