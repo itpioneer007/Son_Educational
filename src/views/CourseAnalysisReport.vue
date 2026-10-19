@@ -934,9 +934,13 @@ const adviceList = computed(() => {
 
           <div class="charts-grid">
             <article
-              v-for="course in courses"
+              v-for="(course, index) in courses"
               :key="course.id"
               class="course-card"
+              :class="{
+                'course-card--wide':
+                  courses.length % 2 === 1 && index === courses.length - 1,
+              }"
             >
               <header class="course-card__head">
                 <div>
@@ -1521,6 +1525,37 @@ const adviceList = computed(() => {
   background: #fff;
 }
 
+/* 奇数张时最后一张横跨整行，避免右侧留下大片空白 */
+.course-card--wide {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1.02fr 1fr;
+  grid-template-areas:
+    "head head"
+    "chart read"
+    "chart tags";
+  column-gap: 30px;
+  align-items: start;
+}
+
+.course-card--wide .course-card__head {
+  grid-area: head;
+}
+
+.course-card--wide .chart-container {
+  grid-area: chart;
+  height: 340px;
+}
+
+.course-card--wide .ai-read {
+  grid-area: read;
+  margin-top: 8px;
+}
+
+.course-card--wide .course-tags {
+  grid-area: tags;
+}
+
 .course-card__head {
   display: flex;
   align-items: flex-start;
@@ -1928,6 +1963,20 @@ const adviceList = computed(() => {
 
   .charts-grid {
     grid-template-columns: 1fr;
+  }
+
+  .course-card--wide {
+    grid-column: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .course-card--wide .chart-container {
+    height: 300px;
+  }
+
+  .course-card--wide .ai-read {
+    margin-top: 0;
   }
 
   .insight-grid {
