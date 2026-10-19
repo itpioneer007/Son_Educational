@@ -30,10 +30,10 @@ const draft = ref("");
 const listRef = ref(null);
 
 // 对话里 AI 一方的头像：取该面板最终产出内容的引擎
-// （课件 = 讯飞智文，教案/练习/试卷 = DeepSeek）。
+// （课件 = 讯飞智文，教案/练习/试卷 = 后端配置的文本模型）。
 // 仅作为对话头像出现，不在界面上暴露"生成引擎"字样。
 const assistantEngine = computed(
-  () => props.pipeline[props.pipeline.length - 1] || "deepseek",
+  () => props.pipeline[props.pipeline.length - 1] || "qwen",
 );
 
 // 正文已生成且当前未在处理时，才允许导出最终文件

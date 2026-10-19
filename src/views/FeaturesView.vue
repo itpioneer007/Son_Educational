@@ -15,6 +15,7 @@ import {
   downloadFile,
   getCoursewareTask,
   getCoursewareTemplates,
+  getCoursewareEngines,
   getCoursewareHistory as fetchApiHistory,
   deleteCoursewareTask as deleteApiTask,
 } from "../composables/useCoursewareApi.js";
@@ -307,10 +308,26 @@ function onSparkTemplateChange(id) {
 }
 
 // 各面板最终产出内容的 AI 引擎（仅用于右侧对话区的 AI 头像，不在界面标注"生成引擎"）：
-// 课件 = DeepSeek 出大纲 + 讯飞智文 排版出稿，头像取最终出稿方；教案/练习/试卷 = DeepSeek。
-const currentPipeline = computed(() =>
-  activePanel.value === "ppt" ? ["deepseek", "zhiwen"] : ["deepseek"],
-);
+// 课件 = 文本模型出大纲 + 讯飞智文排版出稿，头像取最终出稿方；教案/练习/试卷 = 文本模型。
+// 文本模型是谁由后端决定（/api/courseware/engines），前端不再写死 "deepseek"：
+// 2026-10-19 内容生成从 DeepSeek 切到 qwen3.8-max 后，写死的徽标就与实际驱动模型不符。
+const engines = ref({});
+
+async function fetchEngines() {
+  try {
+    engines.value = await getCoursewareEngines();
+  } catch (e) {
+    console.warn("获取模型通道失败:", e);
+    engines.value = {};
+  }
+}
+
+// 本条内容由哪些 AI 协同产出（AiBadge 的 name 列表）
+// PPT 走「文本模型生成大纲 + 讯飞智文排版」，其余三类只有文本模型
+const currentPipeline = computed(() => {
+  const provider = engines.value[activePanel.value]?.provider || "qwen";
+  return activePanel.value === "ppt" ? [provider, "zhiwen"] : [provider];
+});
 
 // 拼完整预览图地址：后端返回 /api/... 相对路径。
 // 若 preview 不是真实图片路径（早期模板误把风格描述放进预览字段），
@@ -3329,6 +3346,8 @@ onMounted(() => {
   fetchSparkTemplates();
   // 本地内置模板：讯飞不可用（未配凭据等）时，市场仍有可选项
   fetchLocalTemplates();
+  // 模型通道：驱动徽标显示真实模型，不写死
+  fetchEngines();
   // 处理路由参数：面板
   const queryPanel = route.query.panel;
   if (queryPanel) {

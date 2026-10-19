@@ -25,6 +25,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config import OUTPUT_DIR, DATA_DIR, TASKS_FILE, CONTENTS_DIR, HOST, PORT
+from config import (
+    PPT_PROVIDER, DOC_PROVIDER, QUIZ_PROVIDER, EXAM_PROVIDER,
+    PPT_MODEL, DOC_MODEL, QUIZ_MODEL, EXAM_MODEL, CONTENT_FALLBACK,
+)
 from ai_service import (
     stream_ppt_content, stream_doc_content, stream_quiz_content, stream_exam_content,
     chat_with_qwen_stream,
@@ -552,6 +556,27 @@ async def _run_export(task_id: str, params: dict):
 # ── API: 历史记录 ─────────────────────────────────────────────
 # 注意：此路由必须定义在 /api/courseware/{task_id} 之前，
 # 否则 FastAPI 会按顺序把 "list" 当作 task_id 匹配
+
+@app.get("/api/courseware/engines")
+def courseware_engines():
+    """四个内容制作角色当前实际使用的模型通道与模型名。
+
+    前端用它渲染「AI 徽标」与驱动说明，不再把模型名写死在页面里。
+    2026-10-19 DeepSeek 免费额度耗尽、默认切到 qwen3.8-max 后，
+    页面若仍显示 DeepSeek 就会出现「文案与实现不符」。
+
+    注意：本路由同样必须排在 /api/courseware/{task_id} 之前，
+    否则 "engines" 会被当成 task_id。
+    """
+    return {
+        "ppt": {"provider": PPT_PROVIDER, "model": PPT_MODEL},
+        "doc": {"provider": DOC_PROVIDER, "model": DOC_MODEL},
+        "quiz": {"provider": QUIZ_PROVIDER, "model": QUIZ_MODEL},
+        "exam": {"provider": EXAM_PROVIDER, "model": EXAM_MODEL},
+        # auto = 主通道因额度/鉴权失败时自动换另一条通道重试
+        "fallback": CONTENT_FALLBACK,
+    }
+
 
 @app.get("/api/courseware/list")
 def list_tasks():

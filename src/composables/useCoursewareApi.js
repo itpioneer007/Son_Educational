@@ -19,6 +19,19 @@ export async function getCoursewareTemplates() {
 }
 
 /**
+ * 查询四个内容制作角色当前实际使用的模型通道。
+ *
+ * 模型名由后端 config.py 决定（课堂制作 / 教案 / 练习 / 试卷可各自不同），
+ * 前端不写死，否则后端切模型后页面徽标会一直显示旧模型。
+ * @returns {Promise<{ppt: {provider, model}, doc, quiz, exam, fallback}>}
+ */
+export async function getCoursewareEngines() {
+  const res = await fetch(`${API_ORIGIN}/api/courseware/engines`);
+  if (!res.ok) throw new Error(`获取模型通道失败: ${res.status}`);
+  return res.json();
+}
+
+/**
  * 提交课件生成任务
  * @param {Object} params - 生成参数
  * @param {'ppt'|'doc'|'quiz'} params.type - 生成类型
